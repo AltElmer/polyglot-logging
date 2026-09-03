@@ -1,0 +1,49 @@
+# Build directories
+build/
+bin/
+lib/
+
+# CMake temporary files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Fortran module files
+*.mod
+*.smod
+fortran_modules/
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Log files generated during testing / execution
+*.log
+execution.log
+test_execution.log
+test_run.log
+
+# CPack packaging outputs
+_CPack_Packages/
+*.tar.gz
+*.tar.xz
+*.zip
+*.deb
+packages/
+
+# IDE / Editor metadata
+.vscode/
+.vs/
+.idea/
+*.swp
+*~
