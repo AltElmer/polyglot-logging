@@ -47,3 +47,6 @@ packages/
 .idea/
 *.swp
 *~
+repomix-output.xml
+test_escape.json
+*.json

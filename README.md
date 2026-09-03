@@ -111,6 +111,8 @@ Defaults  ──►  Environment Variables  ──►  CLI Arguments (Highest Pr
 | **File Level** | `TRACE` | `POLYGLOT_LOG_FILE_LEVEL` | `--log-file-level=LEVEL` |
 | **Color Mode** | `auto` | `NO_COLOR` (forces off) | `--color auto\|always\|never` |
 | **File Format** | `text` | *None* | `--log-format text\|json` |
+| **Max File Size**| `10 MB` | *None* | `--log-max-size <MB>` |
+| **Max Rotations**| `3 files`| *None* | `--log-max-files <NUM>` |
 
 ---
 
@@ -281,7 +283,7 @@ All tests execute via the headless CMake runner script (`cmake/run_cli_test.cmak
 ctest --test-dir build --output-on-failure
 ```
 
-### Complete Test Coverage (23/23 Passing)
+### Complete Test Coverage (26/26 Passing)
 - `test_stdout_data_cleanliness`: Validates zero diagnostic leakage onto `stdout`.
 - `test_default_verbosity_filtering`: Asserts default `INFO` emits without `DEBUG` or `TRACE`.
 - `test_verbose_debug_flag`: Asserts `-v` unlocks `[debug]` logs.
@@ -299,8 +301,11 @@ ctest --test-dir build --output-on-failure
 - `test_multithreaded_concurrency`: Stress-tests 8 concurrent threads actively logging 1,600 events to file under heavy contention.
 - `test_color_mode_flags`: Validates `--color=never` and `--color=always`.
 - `test_json_log_format`: Validates structured single-line NDJSON file logging.
+- `test_json_log_escaping`: Asserts anti-injection character escaping (quotes, backslashes, tabs, newlines) preserves valid single-line NDJSON.
 - `test_positional_arguments_and_delimiter`: Validates positional parameters and `--` delimiter.
 - `test_invalid_log_level_error`: Validates error handling on invalid CLI switches.
+- `test_color_always_overrides_no_color`: Validates explicit CLI switch `--color=always` overrides `NO_COLOR` per no-color.org.
+- `test_rotation_policy_flags`: Validates `--log-max-size` and `--log-max-files` parameters.
 - `test_standalone_c`: Asserts standalone C99 stream isolation.
 - `test_standalone_cpp`: Asserts standalone C++17 stream isolation.
 - `test_standalone_fortran_modern`: Asserts standalone Fortran 2008 stream isolation.

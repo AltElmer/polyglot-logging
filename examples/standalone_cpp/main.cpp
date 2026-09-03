@@ -55,6 +55,9 @@ int main(int argc, char* argv[]) {
             g_console_lvl = DEBUG;
         } else if (arg == "-l" && i + 1 < argc) {
             g_log_file.open(argv[++i], std::ios::app);
+            if (!g_log_file.is_open()) {
+                std::cerr << "[warn] Failed to open log file '" << argv[i] << "'\n";
+            }
         }
     }
 

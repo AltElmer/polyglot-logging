@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/pattern_formatter.h>
 
 #include <atomic>
 #include <cstdarg>
@@ -13,6 +14,12 @@
 #include <mutex>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 static bool is_valid_level(log_level_t level) {
     return level >= LOG_LVL_TRACE && level <= LOG_LVL_OFF;
@@ -30,6 +37,42 @@ static spdlog::level::level_enum map_level(log_level_t level) {
         default:            return spdlog::level::info;
     }
 }
+
+/**
+ * @brief Custom flag formatter that escapes quotes, backslashes, and control characters for JSON.
+ */
+class json_escaped_flag : public spdlog::custom_flag_formatter {
+public:
+    void format(const spdlog::details::log_msg &msg, const std::tm &, spdlog::memory_buf_t &dest) override {
+        std::string escaped;
+        escaped.reserve(msg.payload.size() + 16);
+        for (char c : msg.payload) {
+            switch (c) {
+                case '"':  escaped += "\\\""; break;
+                case '\\': escaped += "\\\\"; break;
+                case '\b': escaped += "\\b";  break;
+                case '\f': escaped += "\\f";  break;
+                case '\n': escaped += "\\n";  break;
+                case '\r': escaped += "\\r";  break;
+                case '\t': escaped += "\\t";  break;
+                default:
+                    if (static_cast<unsigned char>(c) < 0x20) {
+                        char buf[8];
+                        std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                        escaped += buf;
+                    } else {
+                        escaped += c;
+                    }
+                    break;
+            }
+        }
+        dest.append(escaped.data(), escaped.data() + escaped.size());
+    }
+
+    std::unique_ptr<custom_flag_formatter> clone() const override {
+        return std::make_unique<json_escaped_flag>();
+    }
+};
 
 // Fallback bootstrap logger created statically to safely absorb any logs before logger_init()
 static std::shared_ptr<spdlog::logger> get_bootstrap_logger() {
@@ -62,13 +105,26 @@ static std::atomic<bool>         g_file_enabled{false};
 static std::atomic<bool>         g_is_initialized{false};
 static std::atomic<color_mode_t> g_color_mode{COLOR_MODE_AUTO};
 static std::atomic<log_format_t> g_format{LOG_FORMAT_TEXT};
+static std::atomic<size_t>       g_max_file_size_bytes{1024 * 1024 * 10};
+static std::atomic<size_t>       g_max_rotated_files{3};
 
 static void apply_color_mode(color_mode_t mode) {
     if (!g_console_sink) return;
-    if (mode == COLOR_MODE_NEVER || std::getenv("NO_COLOR") != nullptr) {
-        g_console_sink->set_color_mode(spdlog::color_mode::never);
-    } else if (mode == COLOR_MODE_ALWAYS) {
+#if defined(_WIN32)
+    // On Windows, if stderr is redirected to a pipe or file (not a console),
+    // spdlog's wincolor_sink WriteConsoleA fails with ERROR_INVALID_HANDLE.
+    // In that case, use automatic mode so WriteFile is used to preserve pipe output.
+    bool is_pipe = !_isatty(_fileno(stderr));
+    if (is_pipe && mode == COLOR_MODE_ALWAYS) {
+        g_console_sink->set_color_mode(spdlog::color_mode::automatic);
+        return;
+    }
+#endif
+    if (mode == COLOR_MODE_ALWAYS) {
+        // Explicit CLI flag overrides environment variable per NO_COLOR specification
         g_console_sink->set_color_mode(spdlog::color_mode::always);
+    } else if (mode == COLOR_MODE_NEVER || (mode == COLOR_MODE_AUTO && std::getenv("NO_COLOR") != nullptr)) {
+        g_console_sink->set_color_mode(spdlog::color_mode::never);
     } else {
         g_console_sink->set_color_mode(spdlog::color_mode::automatic);
     }
@@ -77,14 +133,51 @@ static void apply_color_mode(color_mode_t mode) {
 static void apply_file_format(log_format_t fmt) {
     if (!g_file_sink) return;
     if (fmt == LOG_FORMAT_JSON) {
-        // Single-line NDJSON format for structured automated ingestion
-        g_file_sink->set_pattern(
+        // Single-line NDJSON format with escaped message payload
+        auto formatter = std::make_unique<spdlog::pattern_formatter>();
+        formatter->add_flag<json_escaped_flag>('*').set_pattern(
             "{\"timestamp\":\"%Y-%m-%dT%H:%M:%S.%e%z\",\"pid\":%P,\"tid\":%t,"
-            "\"level\":\"%l\",\"file\":\"%s\",\"line\":%#,\"message\":\"%v\"}"
+            "\"level\":\"%l\",\"file\":\"%s\",\"line\":%#,\"message\":\"%*\"}"
         );
+        g_file_sink->set_formatter(std::move(formatter));
     } else {
         // Standard ISO-8601 UTC/local timestamp, PID, ThreadID, Level, SourceLocation, Message
         g_file_sink->set_pattern("[%Y-%m-%dT%H:%M:%S.%e%z] [%P:%t] [%l] [%s:%#] %v");
+    }
+}
+
+extern "C" logger_status_t logger_set_rotation_policy(size_t max_file_size_bytes, size_t max_rotated_files) {
+    if (max_file_size_bytes == 0 || max_rotated_files == 0) {
+        return LOGGER_ERR_INVALID_ARG;
+    }
+    g_max_file_size_bytes.store(max_file_size_bytes, std::memory_order_release);
+    g_max_rotated_files.store(max_rotated_files, std::memory_order_release);
+    return LOGGER_OK;
+}
+
+extern "C" logger_status_t logger_init_ext(log_level_t console_level,
+                                           const char* log_file,
+                                           log_level_t file_level,
+                                           size_t max_file_size_bytes,
+                                           size_t max_rotated_files) {
+    if (max_file_size_bytes > 0 && max_rotated_files > 0) {
+        logger_set_rotation_policy(max_file_size_bytes, max_rotated_files);
+    }
+    return logger_init(console_level, log_file, file_level);
+}
+
+extern "C" void logger_enable_backtrace(size_t message_count) {
+    std::lock_guard<std::mutex> lock(g_init_mutex);
+    auto logger = std::atomic_load(&g_logger);
+    if (logger && message_count > 0) {
+        logger->enable_backtrace(message_count);
+    }
+}
+
+extern "C" void logger_dump_backtrace(void) {
+    auto logger = std::atomic_load(&g_logger);
+    if (logger) {
+        logger->dump_backtrace();
     }
 }
 
@@ -127,9 +220,10 @@ extern "C" logger_status_t logger_init(log_level_t console_level, const char* lo
                 std::filesystem::create_directories(parent);
             }
 
-            // 10 MB per file, 3 rotated generations
             g_file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                log_file, 1024 * 1024 * 10, 3
+                log_file,
+                g_max_file_size_bytes.load(std::memory_order_relaxed),
+                g_max_rotated_files.load(std::memory_order_relaxed)
             );
             g_file_sink->set_level(map_level(file_level));
             apply_file_format(g_format.load(std::memory_order_relaxed));

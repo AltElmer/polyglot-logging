@@ -37,6 +37,7 @@ static void fatal_crash_handler(int sig) {
     // Anti-deadlock alarm: force kernel termination if a mutex was held during fault
     alarm(2);
 #endif
+    logger_dump_backtrace(); // Automatically emit recent cached forensic history prior to crash
     logger_flush();
     std::raise(sig);
 }
@@ -51,6 +52,8 @@ struct LoggerConfig {
     int          verbosity_count = 0;
     color_mode_t color_mode      = COLOR_MODE_AUTO;
     log_format_t log_format      = LOG_FORMAT_TEXT;
+    size_t       max_file_size_mb = 10;
+    size_t       max_rotated_files = 3;
 };
 
 static bool parse_level_name(std::string_view name, log_level_t& out_level) {
@@ -94,6 +97,8 @@ static void print_usage(const char* prog_name) {
               << "      --log-file-level LEVEL Set file sink level independently (default: trace)\n"
               << "      --color MODE           Terminal color mode (auto|always|never)\n"
               << "      --log-format FORMAT    File sink format (text|json)\n"
+              << "      --log-max-size MB      Maximum log file size in MB before rotating (default: 10)\n"
+              << "      --log-max-files NUM    Maximum rotated log archive files to keep (default: 3)\n"
               << "  -h, --help                 Display this help message and exit\n"
               << "      --version              Display version information and exit\n"
               << "  --                         End of options delimiter\n\n"
@@ -116,6 +121,9 @@ int main(int argc, char* argv[]) {
 
     // Guarantee clean shutdown flush on standard process exit
     std::atexit(logger_shutdown);
+
+    // Enable in-memory forensic backtrace ring-buffer (caches up to 32 recent messages)
+    logger_enable_backtrace(32);
 
     LoggerConfig cfg;
 
@@ -236,6 +244,44 @@ int main(int argc, char* argv[]) {
                     std::cerr << "Error: Invalid log format '" << val << "'.\n";
                     return 1;
                 }
+            } else if (arg == "--log-max-size") {
+                if (i + 1 >= argc) {
+                    std::cerr << "Error: --log-max-size requires a size in MB.\n";
+                    return 1;
+                }
+                try {
+                    cfg.max_file_size_mb = std::stoul(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error: Invalid size for --log-max-size: '" << argv[i] << "'.\n";
+                    return 1;
+                }
+            } else if (arg.rfind("--log-max-size=", 0) == 0) {
+                std::string val{arg.substr(15)};
+                try {
+                    cfg.max_file_size_mb = std::stoul(val);
+                } catch (...) {
+                    std::cerr << "Error: Invalid size for --log-max-size: '" << val << "'.\n";
+                    return 1;
+                }
+            } else if (arg == "--log-max-files") {
+                if (i + 1 >= argc) {
+                    std::cerr << "Error: --log-max-files requires a count.\n";
+                    return 1;
+                }
+                try {
+                    cfg.max_rotated_files = std::stoul(argv[++i]);
+                } catch (...) {
+                    std::cerr << "Error: Invalid count for --log-max-files: '" << argv[i] << "'.\n";
+                    return 1;
+                }
+            } else if (arg.rfind("--log-max-files=", 0) == 0) {
+                std::string val{arg.substr(16)};
+                try {
+                    cfg.max_rotated_files = std::stoul(val);
+                } catch (...) {
+                    std::cerr << "Error: Invalid count for --log-max-files: '" << val << "'.\n";
+                    return 1;
+                }
             } else {
                 std::cerr << "Unknown option: " << arg << "\n"
                           << "Run '" << argv[0] << " --help' for usage.\n";
@@ -268,6 +314,7 @@ int main(int argc, char* argv[]) {
     // Configure options on logger core
     logger_set_color_mode(cfg.color_mode);
     logger_set_format(cfg.log_format);
+    logger_set_rotation_policy(cfg.max_file_size_mb * 1024 * 1024, cfg.max_rotated_files);
 
     // 5. Initialize the unified dual-sink logging engine
     logger_status_t status = logger_init(cfg.console_level,

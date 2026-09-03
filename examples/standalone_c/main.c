@@ -61,6 +61,9 @@ int main(int argc, char **argv) {
             g_console_lvl = LOG_DEBUG;
         } else if (!strcmp(argv[i], "-l") && i + 1 < argc) {
             g_log_file = fopen(argv[++i], "a");
+            if (!g_log_file) {
+                fprintf(stderr, "[warn] Failed to open log file '%s'\n", argv[i]);
+            }
         }
     }
 

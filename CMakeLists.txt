@@ -207,6 +207,19 @@ set_target_properties(test_multithreaded PROPERTIES
     LINKER_LANGUAGE CXX
 )
 
+add_executable(test_json_escaping
+    tests/test_json_escaping.cpp
+)
+
+target_link_libraries(test_json_escaping
+    PRIVATE
+        polyglot_logger_core
+)
+
+set_target_properties(test_json_escaping PROPERTIES
+    LINKER_LANGUAGE CXX
+)
+
 # ------------------------------------------------------------------------------
 # Standalone Examples Integration
 # ------------------------------------------------------------------------------
@@ -298,6 +311,7 @@ install(TARGETS ${EXPORT_TARGETS}
 install(FILES
     include/polyglot_log.h
     include/polyglot_log.hpp
+    include/polyglot_log.inc
     include/c_subsystem.h
     include/fortran_solver.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
@@ -328,6 +342,10 @@ write_basic_package_version_file(
 # Create PolyglotLogConfig.cmake
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfig.cmake.in"
 "@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+if(@POLYGLOT_USE_SYSTEM_SPDLOG@)
+    find_dependency(spdlog CONFIG)
+endif()
 include(\"\${CMAKE_CURRENT_LIST_DIR}/PolyglotLogTargets.cmake\")
 check_required_components(PolyglotLog)
 "
@@ -546,6 +564,18 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
+    # 17b. JSON Escaping & Single-Line NDJSON Anti-Injection Verification
+    set(TEST_ESCAPE_JSON "${CMAKE_CURRENT_BINARY_DIR}/test_escape.json")
+    add_test(
+        NAME test_json_log_escaping
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:test_json_escaping>
+            "-DCLI_ARGS=${TEST_ESCAPE_JSON}"
+            -DEXPECT_STDOUT=JSON_ESCAPING_TEST_SUCCESS
+            -DEXPECT_FILE=${TEST_ESCAPE_JSON}
+            -P ${TEST_DRIVER}
+    )
+
     # 18. Positional Arguments & End-of-Options Delimiter (--)
     add_test(
         NAME test_positional_arguments_and_delimiter
@@ -568,7 +598,30 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # 20. Standalone Examples Stream Isolation Tests
+    # 20. NO_COLOR Precedence: --color=always overrides NO_COLOR=1 per no-color.org
+    add_test(
+        NAME test_color_always_overrides_no_color
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            -DCLI_ARGS=--color=always
+            -DTEST_ENV=NO_COLOR=1
+            -DEXPECT_STDERR=\\[info\\]
+            -P ${TEST_DRIVER}
+    )
+
+    # 21. Configurable Rotation Policy: --log-max-size and --log-max-files
+    set(TEST_ROT_LOG "${CMAKE_CURRENT_BINARY_DIR}/test_rotation.log")
+    add_test(
+        NAME test_rotation_policy_flags
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=-l ${TEST_ROT_LOG} --log-max-size 5 --log-max-files 2"
+            -DEXPECT_FILE=${TEST_ROT_LOG}
+            -DEXPECT_STDOUT=^COMPUTATION_SUCCESS: 42$
+            -P ${TEST_DRIVER}
+    )
+
+    # 22. Standalone Examples Stream Isolation Tests
     if(BUILD_EXAMPLES)
         add_test(
             NAME test_standalone_c

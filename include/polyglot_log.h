@@ -130,23 +130,60 @@ void logger_dispatch_loc(log_level_t level, const char* component,
                          const char* message);
 
 /**
+ * @brief Enable in-memory backtrace ring-buffer for crash forensics.
+ * Caches recent TRACE and DEBUG messages in memory without polluting console output.
+ * @param message_count Number of recent messages to preserve (e.g., 32 or 64).
+ */
+void logger_enable_backtrace(size_t message_count);
+
+/**
+ * @brief Dump cached backtrace messages immediately to all active sinks.
+ */
+void logger_dump_backtrace(void);
+
+/**
+ * @brief Configure file rotation size and archive retention policy.
+ * @param max_file_size_bytes Maximum size in bytes before rotating (default: 10 MB).
+ * @param max_rotated_files Maximum number of rotated archive files (default: 3).
+ */
+logger_status_t logger_set_rotation_policy(size_t max_file_size_bytes, size_t max_rotated_files);
+
+/**
+ * @brief Extended initialization supporting explicit rotation parameters.
+ */
+logger_status_t logger_init_ext(log_level_t console_level,
+                               const char* log_file,
+                               log_level_t file_level,
+                               size_t max_file_size_bytes,
+                               size_t max_rotated_files);
+
+/**
  * @brief Formatted diagnostic dispatch helper for pure C callers.
  * Evaluates format arguments into an intermediate buffer before dispatching.
  */
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 3, 4)))
+  #define POLYGLOT_PRINTF_FORMAT(fmt_idx, va_idx) __attribute__((format(printf, fmt_idx, va_idx)))
+  #define POLYGLOT_FORMAT_STRING
+#elif defined(_MSC_VER)
+  #include <sal.h>
+  #define POLYGLOT_PRINTF_FORMAT(fmt_idx, va_idx)
+  #define POLYGLOT_FORMAT_STRING _Printf_format_string_
+#else
+  #define POLYGLOT_PRINTF_FORMAT(fmt_idx, va_idx)
+  #define POLYGLOT_FORMAT_STRING
 #endif
-void logger_dispatch_format(log_level_t level, const char* component, const char* fmt, ...);
+
+POLYGLOT_PRINTF_FORMAT(3, 4)
+void logger_dispatch_format(log_level_t level, const char* component,
+                            POLYGLOT_FORMAT_STRING const char* fmt, ...);
 
 /**
  * @brief Formatted diagnostic dispatch with caller source location.
  */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 6, 7)))
-#endif
+POLYGLOT_PRINTF_FORMAT(6, 7)
 void logger_dispatch_format_loc(log_level_t level, const char* component,
                                 const char* file, int line, const char* func,
-                                const char* fmt, ...);
+                                POLYGLOT_FORMAT_STRING const char* fmt, ...);
 
 /**
  * @brief Force flush all active logger sinks immediately.
@@ -204,5 +241,22 @@ void logger_shutdown(void);
 #define LOGF_WARN(comp, ...)  do { if (logger_is_enabled(LOG_LVL_WARN))  logger_dispatch_format_loc(LOG_LVL_WARN,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 #define LOGF_ERROR(comp, ...) do { if (logger_is_enabled(LOG_LVL_ERROR)) logger_dispatch_format_loc(LOG_LVL_ERROR, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 #define LOGF_FATAL(comp, ...) do { if (logger_is_enabled(LOG_LVL_FATAL)) logger_dispatch_format_loc(LOG_LVL_FATAL, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+
+/**
+ * @brief Fail-fast diagnostic macros: log at FATAL level, flush all sinks, and abort immediately.
+ */
+#define LOG_FATAL_AND_ABORT(comp, msg) \
+    do { \
+        LOG_FATAL(comp, msg); \
+        logger_flush(); \
+        abort(); \
+    } while(0)
+
+#define LOGF_FATAL_AND_ABORT(comp, ...) \
+    do { \
+        LOGF_FATAL(comp, __VA_ARGS__); \
+        logger_flush(); \
+        abort(); \
+    } while(0)
 
 #endif /* POLYGLOT_LOG_H */
