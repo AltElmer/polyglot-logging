@@ -127,7 +127,7 @@ if(HAVE_FORTRAN)
 
     # Enable Fortran preprocessor for __FILE__ and __LINE__ source-location capture
     if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-        target_compile_options(polyglot_logger_fortran PRIVATE -cpp)
+        target_compile_options(polyglot_logger_fortran PRIVATE -cpp -ffree-line-length-none)
     elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
         target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
     endif()

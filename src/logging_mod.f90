@@ -93,7 +93,11 @@ contains
         if (.not. f_log_enabled(level)) return
 
         write(buffer, '(A, I0, A, ES10.3)') "Iteration ", iter, ": Residual norm = ", residual
-        call f_log_loc(level, component, __FILE__, __LINE__, trim(buffer))
+        call f_log_loc(level, &
+                       component, &
+                       __FILE__, &
+                       __LINE__, &
+                       trim(buffer))
     end subroutine f_log_iteration
 
     !> Demonstrates a numerical computation routine written in Fortran interoperating with C ABI
@@ -103,21 +107,30 @@ contains
         real(c_double) :: res1, res2
 
         rc = 0
-        call f_log_loc(LOG_LVL_INFO, "Fortran-Solver", __FILE__, __LINE__, &
+        call f_log_loc(LOG_LVL_INFO, &
+                       "Fortran-Solver", &
+                       __FILE__, &
+                       __LINE__, &
                        "Initializing Krylov subspace iterative solver")
 
         res1 = 1.42d-02
         call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 1, res1)
 
         if (f_log_enabled(LOG_LVL_TRACE)) then
-            call f_log_loc(LOG_LVL_TRACE, "Fortran-Solver", __FILE__, __LINE__, &
+            call f_log_loc(LOG_LVL_TRACE, &
+                           "Fortran-Solver", &
+                           __FILE__, &
+                           __LINE__, &
                            "Vector dot product <r, r> = 2.0164e-04")
         end if
 
         res2 = 8.15d-06
         call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 2, res2)
 
-        call f_log_loc(LOG_LVL_INFO, "Fortran-Solver", __FILE__, __LINE__, &
+        call f_log_loc(LOG_LVL_INFO, &
+                       "Fortran-Solver", &
+                       __FILE__, &
+                       __LINE__, &
                        "Solver converged in 2 iterations (tol=1.0e-05)")
     end function run_fortran_solver
 
