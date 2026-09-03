@@ -6,7 +6,7 @@
 [![Standard](https://img.shields.io/badge/Fortran-2008-blue.svg)](https://fortran-lang.org/)
 [![NO_COLOR](https://img.shields.io/badge/NO__COLOR-compliant-success.svg)](https://no-color.org/)
 
-An enterprise-hardened, hardware-agnostic, cross-platform reference implementation demonstrating canonical verbose debug logging best practices for command-line interfaces (CLIs) spanning **C**, **C++**, and **Fortran**.
+A production-grade, hardware-agnostic, cross-platform reference implementation and reusable library demonstrating canonical diagnostic logging best practices for command-line interfaces (CLIs) spanning **C**, **C++**, and **Fortran**.
 
 ---
 
@@ -17,15 +17,16 @@ An enterprise-hardened, hardware-agnostic, cross-platform reference implementati
                   │         polyglot-cli         │
                   │                              │
                   │  CLI & Environment Parser   │
-                  │  Crash Signal Handlers       │
-                  │  Application Domain Logic    │
+                  │  Crash & Signal Handlers     │
+                  │  Positional Arguments / --   │
                   └──────────────┬───────────────┘
                                  │
                                  ▼
                   ┌──────────────────────────────┐
-                  │     polyglot_log Facade      │
+                  │     Polyglot Logging API     │
                   │                              │
                   │  C ABI (polyglot_log.h)      │
+                  │  C++ Stream (polyglot_log.hpp│
                   │  Fortran ISO_C (logging_mod) │
                   │  Caller Source Location      │
                   │  Fast-Path Enabled Checks    │
@@ -48,7 +49,8 @@ An enterprise-hardened, hardware-agnostic, cross-platform reference implementati
           │ Stripped noise  │         │ Source Location │
           │ ANSI colors     │         │ ISO-8601 UTC    │
           │ NO_COLOR aware  │         │ PID / Thread ID │
-          │ Auto-detect TTY │         │ Rotating 10MBx3 │
+          │ Auto-detect TTY │         │ Text or NDJSON  │
+          │ --color switch  │         │ Rotating 10MBx3 │
           └─────────────────┘         └─────────────────┘
 ```
 
@@ -61,11 +63,11 @@ An enterprise-hardened, hardware-agnostic, cross-platform reference implementati
 1. **Interactive Console Sink (`stderr`)**:
    - Filtered dynamically via `-q` (quiet), `--silent` (off), default `INFO`, `-v` (debug), `-vv` (trace), or `--log-level <LEVEL>`.
    - Clean formatting (`%^[%l]%$ %v`) using ANSI colors when attached to an interactive TTY.
-   - Compliant with the [NO_COLOR standard](https://no-color.org): suppresses ANSI color escapes when `NO_COLOR` is present.
-   - Suppresses microsecond timestamps, thread IDs, and source file locations to reduce human cognitive load.
+   - Compliant with the [NO_COLOR standard](https://no-color.org): suppresses ANSI color escapes when `NO_COLOR` is present. Configurable via `--color auto|always|never`.
+   - Suppresses microsecond timestamps, thread IDs, and source file locations to minimize cognitive load.
 2. **Forensic File Sink (`-l <path>` / `--log-file <path>`)**:
    - Forensic disk sink capturing down to `TRACE` level by default (independently configurable via `--log-file-level <LEVEL>`).
-   - Plain text (ANSI escape codes strictly disabled).
+   - Plain text or single-line NDJSON format (`--log-format text|json`).
    - High-precision ISO-8601 timestamps, process ID (PID), thread ID, component tag, and exact caller source locations (`[%s:%#]`).
    - Size-based rotation (10 MB per file, 3 generations) to prevent runaway disk consumption.
 
@@ -75,15 +77,21 @@ An enterprise-hardened, hardware-agnostic, cross-platform reference implementati
 - **Accurate Fast-Path Semantics**: `logger_is_enabled(level)` tracks the active thresholds of both the console and file sinks directly, guaranteeing that expensive numerical serialization is skipped when neither sink accepts the event.
 
 ### Principle 4: Concurrency & Lifecycle Safety
-- **No Data Race on Shutdown**: `logger_shutdown()` flushes sinks and drops registration without nullifying the logger pointer, leaving a static fallback bootstrap logger active to absorb any late static destructors or teardown logs safely.
-- **Initialization Error Reporting**: `logger_init(...)` returns explicit `logger_status_t` codes and automatically creates missing parent directories. If an explicitly requested file sink cannot be created, the CLI reports an error and aborts.
+- **Atomic Pointer Access**: `g_logger` is managed via `std::atomic_load` and `std::atomic_store` across all dispatch and reconfiguration calls, guaranteeing memory safety under heavy multi-threaded contention.
+- **Bootstrap Fallback Logger**: Statically initialized bootstrap sink ensures pre-init and post-shutdown log events never fault.
+- **Selective Logger Dropping**: Drops only `"polyglot_cli"`, leaving loggers from other libraries intact.
+- **Initialization Error Reporting**: Returns explicit status codes (`LOGGER_OK`, `LOGGER_ERR_INVALID_ARG`, `LOGGER_ERR_FILE_OPEN`) and creates parent directories automatically.
 
 ### Principle 5: Caller Source-Location Passthrough
-- Exposes `logger_dispatch_loc(...)` accepting `file`, `line`, `func` (`spdlog::source_loc`).
-- Provides ergonomic C and C++ macros (`LOG_INFO`, `LOGF_DEBUG`, `LOG_TRACE`, etc.) that automatically inject `__FILE__`, `__LINE__`, and `__func__` into disk logs without polluting console output.
+- C/C++: Exposes `LOG_TRACE`, `LOG_DEBUG`, `LOG_INFO`, etc. passing `__FILE__`, `__LINE__`, and `__func__`.
+- Fortran 2008: Preprocessor enabled (`-cpp` / `/fpp`) providing `F_LOG_INFO`, `F_LOG_DEBUG`, `F_LOG_TRACE`.
 
-### Principle 6: Decoupled Architecture
-- Domain numerical routines (`run_c_computation`, `run_fortran_solver`) live in dedicated headers (`include/c_subsystem.h`, `include/fortran_solver.h`), keeping `include/polyglot_log.h` 100% pure as a reusable logging library interface.
+### Principle 6: Type-Safe C++ Interface
+- Dedicated zero-dependency [`include/polyglot_log.hpp`](include/polyglot_log.hpp) header provides type-safe C++17 fold-expression stream logging (`LOG_CPP_INFO("CLI", "Processing ", count, " elements")`).
+
+### Principle 7: Subsystem Error Propagation
+- Numerical subsystems return integer status codes (`int run_c_computation()`, `integer(c_int) function run_fortran_solver()`).
+- CLI driver verifies and logs failures, exiting non-zero if any subsystem fails.
 
 ---
 
@@ -101,6 +109,7 @@ Defaults  ──►  Environment Variables  ──►  CLI Arguments (Highest Pr
 | **File Path** | *None* | `POLYGLOT_LOG_FILE` | `-l PATH`, `--log-file PATH`, `--log-file=PATH` |
 | **File Level** | `TRACE` | `POLYGLOT_LOG_FILE_LEVEL` | `--log-file-level=LEVEL` |
 | **Color Mode** | `auto` | `NO_COLOR` (forces off) | `--color auto\|always\|never` |
+| **File Format** | `text` | *None* | `--log-format text\|json` |
 
 ---
 
@@ -111,7 +120,7 @@ Defaults  ──►  Environment Variables  ──►  CLI Arguments (Highest Pr
 ├── .editorconfig                  # Consistent cross-editor whitespace & indentation
 ├── .clang-format                  # Standardized C/C++ code formatting rules
 ├── .gitignore                     # Git ignore rules for build, logs, and packages
-├── CMakeLists.txt                 # Modern CMake 3.24+ (spdlog, CPack, CTest, examples)
+├── CMakeLists.txt                 # Modern CMake 3.24+ (spdlog, CPack, CTest, export)
 ├── LICENSE                        # MIT License (FLOSS)
 ├── README.md                      # Architecture guide and documentation
 ├── .github/workflows/ci.yml       # GitHub Actions CI matrix (Linux, macOS, Windows)
@@ -119,15 +128,16 @@ Defaults  ──►  Environment Variables  ──►  CLI Arguments (Highest Pr
 │   └── run_cli_test.cmake         # Cross-platform CTest execution & stream assertor
 ├── include/
 │   ├── polyglot_log.h             # Pure reusable C ABI logging facade
+│   ├── polyglot_log.hpp           # Type-safe C++17 stream wrapper
 │   ├── c_subsystem.h              # Pure C computational component header
 │   └── fortran_solver.h           # Fortran solver component header
 ├── src/
-│   ├── polyglot_log.cpp           # C++ spdlog dual-sink core & C ABI export
+│   ├── polyglot_log.cpp           # C++ spdlog dual-sink core & atomic C ABI export
 │   ├── c_subsystem.c              # Pure C computational component
 │   ├── logging_mod.f90            # Fortran 2008 ISO_C_BINDING module & solver routine
 │   └── main.cpp                   # Production CLI entry point
 ├── tests/
-│   └── test_multithreaded.cpp     # Multi-threaded concurrency stress test
+│   └── test_multithreaded.cpp     # Multi-threaded concurrency stress test (8 threads)
 └── examples/                      # Standalone zero-dependency MWEs
     ├── CMakeLists.txt             # Integrated example build rules
     ├── standalone_c/              # Pure C99 dual-sink minimal CLI (thread-safe)
@@ -159,31 +169,34 @@ cmake --build build
 ### CLI Options
 
 ```
-Usage: polyglot-cli [OPTIONS]
+Usage: polyglot-cli [OPTIONS] [--] [ARGUMENTS...]
 
 Options:
   -v, --verbose              Increase console verbosity (-v for DEBUG, -vv for TRACE)
-  -q, --quiet                Quiet mode: display only errors and warnings on console
+  -q, --quiet                Quiet mode: display only errors on console
       --silent               Silent mode: disable all console logging (LOG_LVL_OFF)
       --log-level LEVEL      Explicitly set console level (trace|debug|info|warn|error|off)
   -l, --log-file PATH        Enable rotating file sink at specified path
       --log-file-level LEVEL Set file sink level independently (default: trace)
       --color MODE           Terminal color mode (auto|always|never)
+      --log-format FORMAT    File sink format (text|json)
   -h, --help                 Display this help message and exit
       --version              Display version information and exit
+  --                         End of options delimiter
 ```
 
 ### Stream Separation in Action
 
 ```bash
 # Pipeline execution: stdout payload captured to results.dat, diagnostics stay on terminal
-./build/polyglot-cli -v -l logs/execution.log > results.dat
+./build/polyglot-cli -v -l logs/execution.log -- input.mesh output.h5 > results.dat
 ```
 
 **Terminal (`stderr`):**
 ```text
 [info] [CLI] Application starting
 [debug] [CLI] Parsed CLI config: verbosity=1, quiet=0, silent=0, log_file='logs/execution.log'
+[debug] [CLI] Received 2 positional arguments
 [info] [C-Subsystem] Initializing sparse matrix allocation
 [debug] [C-Subsystem] Allocated 4096 bytes for CSR row pointers
 [info] [C-Subsystem] Matrix factorization complete
@@ -201,23 +214,57 @@ COMPUTATION_SUCCESS: 42
 
 **Forensic Disk Log (`logs/execution.log` with Source Locations):**
 ```text
-[2026-09-03T11:15:00.123+02:00] [18420:18420] [info] [main.cpp:165] [CLI] Application starting
-[2026-09-03T11:15:00.124+02:00] [18420:18420] [debug] [main.cpp:168] [CLI] Parsed CLI config: verbosity=1, quiet=0, silent=0, log_file='logs/execution.log'
+[2026-09-03T11:15:00.123+02:00] [18420:18420] [info] [main.cpp:218] [CLI] Application starting
+[2026-09-03T11:15:00.124+02:00] [18420:18420] [debug] [main.cpp:221] [CLI] Parsed CLI config: verbosity=1, quiet=0, silent=0, log_file='logs/execution.log'
 [2026-09-03T11:15:00.124+02:00] [18420:18420] [info] [c_subsystem.c:13] [C-Subsystem] Initializing sparse matrix allocation
 [2026-09-03T11:15:00.124+02:00] [18420:18420] [debug] [c_subsystem.c:17] [C-Subsystem] Allocated 4096 bytes for CSR row pointers
 [2026-09-03T11:15:00.125+02:00] [18420:18420] [trace] [c_subsystem.c:19] [C-Subsystem] CSR index verification passed [dim=64x64, nnz=256]
 [2026-09-03T11:15:00.125+02:00] [18420:18420] [info] [c_subsystem.c:21] [C-Subsystem] Matrix factorization complete
-[2026-09-03T11:15:00.125+02:00] [18420:18420] [info] [logging_mod.f90:78] [Fortran-Solver] Initializing Krylov subspace iterative solver
-[2026-09-03T11:15:00.126+02:00] [18420:18420] [debug] [logging_mod.f90:81] [Fortran-Solver] Iteration 1: Residual norm = 1.420E-02
-[2026-09-03T11:15:00.126+02:00] [18420:18420] [trace] [logging_mod.f90:84] [Fortran-Solver] Vector dot product <r, r> = 2.0164e-04
-[2026-09-03T11:15:00.126+02:00] [18420:18420] [debug] [logging_mod.f90:87] [Fortran-Solver] Iteration 2: Residual norm = 8.150E-06
-[2026-09-03T11:15:00.127+02:00] [18420:18420] [info] [logging_mod.f90:89] [Fortran-Solver] Solver converged in 2 iterations (tol=1.0e-05)
-[2026-09-03T11:15:00.127+02:00] [18420:18420] [info] [main.cpp:177] [CLI] Application completed successfully
+[2026-09-03T11:15:00.125+02:00] [18420:18420] [info] [logging_mod.f90:108] [Fortran-Solver] Initializing Krylov subspace iterative solver
+[2026-09-03T11:15:00.126+02:00] [18420:18420] [debug] [logging_mod.f90:98] [Fortran-Solver] Iteration 1: Residual norm = 1.420E-02
+[2026-09-03T11:15:00.126+02:00] [18420:18420] [trace] [logging_mod.f90:114] [Fortran-Solver] Vector dot product <r, r> = 2.0164e-04
+[2026-09-03T11:15:00.126+02:00] [18420:18420] [debug] [logging_mod.f90:98] [Fortran-Solver] Iteration 2: Residual norm = 8.150E-06
+[2026-09-03T11:15:00.127+02:00] [18420:18420] [info] [logging_mod.f90:118] [Fortran-Solver] Solver converged in 2 iterations (tol=1.0e-05)
+[2026-09-03T11:15:00.127+02:00] [18420:18420] [info] [main.cpp:253] [CLI] Application completed successfully
 ```
 
 ---
 
-## 5. Automated Verification (CTest Suite)
+## 5. Integrating the Polyglot Logger into Downstream Projects
+
+The project exports canonical CMake package configuration targets. Downstream projects can consume the library directly:
+
+```cmake
+find_package(PolyglotLog CONFIG REQUIRED)
+
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE PolyglotLog::polyglot_logger_core)
+
+# If consuming Fortran module:
+target_link_libraries(my_app PRIVATE PolyglotLog::polyglot_logger_fortran)
+```
+
+In your C or C++ application:
+```cpp
+#include <polyglot_log.h>   // C ABI
+#include <polyglot_log.hpp> // Modern C++ stream wrapper
+
+int main() {
+    logger_init(LOG_LVL_INFO, "run.log", LOG_LVL_TRACE);
+    LOG_CPP_INFO("MyApp", "Starting calculation with ", 4, " threads");
+    logger_shutdown();
+}
+```
+
+In your Fortran application:
+```fortran
+use logging_mod
+call f_log(LOG_LVL_INFO, "Solver", "Step completed")
+```
+
+---
+
+## 6. Automated Verification (CTest Suite)
 
 All tests execute via the headless CMake runner script (`cmake/run_cli_test.cmake`), ensuring cross-platform reliability without shell redirection bugs.
 
@@ -225,7 +272,7 @@ All tests execute via the headless CMake runner script (`cmake/run_cli_test.cmak
 ctest --test-dir build --output-on-failure
 ```
 
-### Complete Test Coverage (19/19 Passing)
+### Complete Test Coverage (23/23 Passing)
 - `test_stdout_data_cleanliness`: Validates zero diagnostic leakage onto `stdout`.
 - `test_default_verbosity_filtering`: Asserts default `INFO` emits without `DEBUG` or `TRACE`.
 - `test_verbose_debug_flag`: Asserts `-v` unlocks `[debug]` logs.
@@ -240,7 +287,11 @@ ctest --test-dir build --output-on-failure
 - `test_conflicting_flags_error`: Validates mutual exclusion (`-q` + `-v` produces exit code 1).
 - `test_help_flag`: Asserts `--help` emits usage cleanly and exits 0.
 - `test_polyglot_solver_logging`: Confirms C and Fortran subsystems both log through the unified facade.
-- `test_multithreaded_concurrency`: Stress-tests 8 concurrent threads logging under high contention.
+- `test_multithreaded_concurrency`: Stress-tests 8 concurrent threads actively logging 1,600 events to file under heavy contention.
+- `test_color_mode_flags`: Validates `--color=never` and `--color=always`.
+- `test_json_log_format`: Validates structured single-line NDJSON file logging.
+- `test_positional_arguments_and_delimiter`: Validates positional parameters and `--` delimiter.
+- `test_invalid_log_level_error`: Validates error handling on invalid CLI switches.
 - `test_standalone_c`: Asserts standalone C99 stream isolation.
 - `test_standalone_cpp`: Asserts standalone C++17 stream isolation.
 - `test_standalone_fortran_modern`: Asserts standalone Fortran 2008 stream isolation.
@@ -248,9 +299,9 @@ ctest --test-dir build --output-on-failure
 
 ---
 
-## 6. Packaging with CPack
+## 7. Packaging with CPack
 
-Generate clean, stripped release packages with standard `GNUInstallDirs` directory hierarchies:
+Generate clean release packages with standard `GNUInstallDirs` directory hierarchies:
 
 ```bash
 cd build
@@ -259,7 +310,7 @@ cpack -G "ZIP;TGZ"
 
 ---
 
-## 7. License
+## 8. License
 
 This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
 Free and Open Source Software (FLOSS).

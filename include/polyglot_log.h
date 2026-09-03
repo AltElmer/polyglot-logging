@@ -10,7 +10,8 @@ extern "C" {
 
 /**
  * @brief Standardized log severity levels across all language layers.
- * Lower numeric value = higher verbosity; higher numeric value = higher severity.
+ * Ordering: TRACE < DEBUG < INFO < WARN < ERROR < FATAL < OFF.
+ * Severity increases towards FATAL; verbosity increases towards TRACE.
  */
 typedef enum {
     LOG_LVL_TRACE = 0,
@@ -21,6 +22,23 @@ typedef enum {
     LOG_LVL_FATAL = 5,
     LOG_LVL_OFF   = 6  /**< Silences all output for the designated sink */
 } log_level_t;
+
+/**
+ * @brief Terminal color modes for the console sink.
+ */
+typedef enum {
+    COLOR_MODE_AUTO   = 0, /**< Colorize when attached to an interactive TTY and NO_COLOR unset */
+    COLOR_MODE_ALWAYS = 1, /**< Always emit ANSI escape sequences */
+    COLOR_MODE_NEVER  = 2  /**< Never emit ANSI escape sequences */
+} color_mode_t;
+
+/**
+ * @brief File sink output format.
+ */
+typedef enum {
+    LOG_FORMAT_TEXT = 0,   /**< Standard human-readable ISO-timestamped format */
+    LOG_FORMAT_JSON = 1    /**< Single-line structured NDJSON for automated ingest */
+} log_format_t;
 
 /**
  * @brief Status return codes for logger operations.
@@ -65,6 +83,26 @@ int logger_is_console_enabled(log_level_t level);
  * @brief Check if a given log level is accepted specifically by the file sink.
  */
 int logger_is_file_enabled(log_level_t level);
+
+/**
+ * @brief Dynamically reconfigure the console sink severity threshold.
+ */
+logger_status_t logger_set_console_level(log_level_t level);
+
+/**
+ * @brief Dynamically reconfigure the file sink severity threshold.
+ */
+logger_status_t logger_set_file_level(log_level_t level);
+
+/**
+ * @brief Set the terminal color mode for the console sink.
+ */
+void logger_set_color_mode(color_mode_t mode);
+
+/**
+ * @brief Set the file sink format (text or JSON).
+ */
+void logger_set_format(log_format_t format);
 
 /**
  * @brief Dispatch a diagnostic log event through the unified logging core.
@@ -126,19 +164,43 @@ void logger_shutdown(void);
 #endif
 
 /* -------------------------------------------------------------------------- */
-/* Ergonomic Logging Macros with Source-Location Capture & Fast-Path Guards   */
+/* Compile-Time Stripping Configuration                                       */
+/* Set POLYGLOT_ACTIVE_LEVEL to LOG_LVL_DEBUG, LOG_LVL_INFO, etc. to compile  */
+/* out lower-level log macros completely in performance-critical builds.      */
 /* -------------------------------------------------------------------------- */
 
+#ifndef POLYGLOT_ACTIVE_LEVEL
+#define POLYGLOT_ACTIVE_LEVEL LOG_LVL_TRACE
+#endif
+
+#if POLYGLOT_ACTIVE_LEVEL <= LOG_LVL_TRACE
 #define LOG_TRACE(comp, msg) logger_dispatch_loc(LOG_LVL_TRACE, comp, __FILE__, __LINE__, __func__, msg)
+#define LOGF_TRACE(comp, ...) do { if (logger_is_enabled(LOG_LVL_TRACE)) logger_dispatch_format_loc(LOG_LVL_TRACE, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#else
+#define LOG_TRACE(comp, msg) do {} while(0)
+#define LOGF_TRACE(comp, ...) do {} while(0)
+#endif
+
+#if POLYGLOT_ACTIVE_LEVEL <= LOG_LVL_DEBUG
 #define LOG_DEBUG(comp, msg) logger_dispatch_loc(LOG_LVL_DEBUG, comp, __FILE__, __LINE__, __func__, msg)
+#define LOGF_DEBUG(comp, ...) do { if (logger_is_enabled(LOG_LVL_DEBUG)) logger_dispatch_format_loc(LOG_LVL_DEBUG, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#else
+#define LOG_DEBUG(comp, msg) do {} while(0)
+#define LOGF_DEBUG(comp, ...) do {} while(0)
+#endif
+
+#if POLYGLOT_ACTIVE_LEVEL <= LOG_LVL_INFO
 #define LOG_INFO(comp, msg)  logger_dispatch_loc(LOG_LVL_INFO,  comp, __FILE__, __LINE__, __func__, msg)
+#define LOGF_INFO(comp, ...)  do { if (logger_is_enabled(LOG_LVL_INFO))  logger_dispatch_format_loc(LOG_LVL_INFO,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#else
+#define LOG_INFO(comp, msg)  do {} while(0)
+#define LOGF_INFO(comp, ...)  do {} while(0)
+#endif
+
 #define LOG_WARN(comp, msg)  logger_dispatch_loc(LOG_LVL_WARN,  comp, __FILE__, __LINE__, __func__, msg)
 #define LOG_ERROR(comp, msg) logger_dispatch_loc(LOG_LVL_ERROR, comp, __FILE__, __LINE__, __func__, msg)
 #define LOG_FATAL(comp, msg) logger_dispatch_loc(LOG_LVL_FATAL, comp, __FILE__, __LINE__, __func__, msg)
 
-#define LOGF_TRACE(comp, ...) do { if (logger_is_enabled(LOG_LVL_TRACE)) logger_dispatch_format_loc(LOG_LVL_TRACE, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
-#define LOGF_DEBUG(comp, ...) do { if (logger_is_enabled(LOG_LVL_DEBUG)) logger_dispatch_format_loc(LOG_LVL_DEBUG, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
-#define LOGF_INFO(comp, ...)  do { if (logger_is_enabled(LOG_LVL_INFO))  logger_dispatch_format_loc(LOG_LVL_INFO,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 #define LOGF_WARN(comp, ...)  do { if (logger_is_enabled(LOG_LVL_WARN))  logger_dispatch_format_loc(LOG_LVL_WARN,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 #define LOGF_ERROR(comp, ...) do { if (logger_is_enabled(LOG_LVL_ERROR)) logger_dispatch_format_loc(LOG_LVL_ERROR, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 #define LOGF_FATAL(comp, ...) do { if (logger_is_enabled(LOG_LVL_FATAL)) logger_dispatch_format_loc(LOG_LVL_FATAL, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)

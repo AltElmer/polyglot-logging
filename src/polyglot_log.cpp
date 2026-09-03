@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+static bool is_valid_level(log_level_t level) {
+    return level >= LOG_LVL_TRACE && level <= LOG_LVL_OFF;
+}
+
 static spdlog::level::level_enum map_level(log_level_t level) {
     switch (level) {
         case LOG_LVL_TRACE: return spdlog::level::trace;
@@ -32,9 +36,14 @@ static std::shared_ptr<spdlog::logger> get_bootstrap_logger() {
     static std::shared_ptr<spdlog::logger> bootstrap = []() {
         auto b = spdlog::get("bootstrap");
         if (!b) {
-            b = spdlog::stderr_color_mt("bootstrap");
+            auto sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+            sink->set_level(spdlog::level::trace);
+            sink->set_pattern("%^[%l]%$ %v");
+            if (std::getenv("NO_COLOR") != nullptr) {
+                sink->set_color_mode(spdlog::color_mode::never);
+            }
+            b = std::make_shared<spdlog::logger>("bootstrap", sink);
             b->set_level(spdlog::level::trace);
-            b->set_pattern("%^[%l]%$ %v");
         }
         return b;
     }();
@@ -44,17 +53,52 @@ static std::shared_ptr<spdlog::logger> get_bootstrap_logger() {
 static std::mutex g_init_mutex;
 static std::shared_ptr<spdlog::logger> g_logger = get_bootstrap_logger();
 
-static std::atomic<log_level_t> g_console_level{LOG_LVL_INFO};
-static std::atomic<log_level_t> g_file_level{LOG_LVL_OFF};
-static std::atomic<bool>        g_file_enabled{false};
-static std::atomic<bool>        g_is_initialized{false};
+static std::shared_ptr<spdlog::sinks::stderr_color_sink_mt> g_console_sink;
+static std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> g_file_sink;
+
+static std::atomic<log_level_t>  g_console_level{LOG_LVL_INFO};
+static std::atomic<log_level_t>  g_file_level{LOG_LVL_OFF};
+static std::atomic<bool>         g_file_enabled{false};
+static std::atomic<bool>         g_is_initialized{false};
+static std::atomic<color_mode_t> g_color_mode{COLOR_MODE_AUTO};
+static std::atomic<log_format_t> g_format{LOG_FORMAT_TEXT};
+
+static void apply_color_mode(color_mode_t mode) {
+    if (!g_console_sink) return;
+    if (mode == COLOR_MODE_NEVER || std::getenv("NO_COLOR") != nullptr) {
+        g_console_sink->set_color_mode(spdlog::color_mode::never);
+    } else if (mode == COLOR_MODE_ALWAYS) {
+        g_console_sink->set_color_mode(spdlog::color_mode::always);
+    } else {
+        g_console_sink->set_color_mode(spdlog::color_mode::automatic);
+    }
+}
+
+static void apply_file_format(log_format_t fmt) {
+    if (!g_file_sink) return;
+    if (fmt == LOG_FORMAT_JSON) {
+        // Single-line NDJSON format for structured automated ingestion
+        g_file_sink->set_pattern(
+            "{\"timestamp\":\"%Y-%m-%dT%H:%M:%S.%e%z\",\"pid\":%P,\"tid\":%t,"
+            "\"level\":\"%l\",\"file\":\"%s\",\"line\":%#,\"message\":\"%v\"}"
+        );
+    } else {
+        // Standard ISO-8601 UTC/local timestamp, PID, ThreadID, Level, SourceLocation, Message
+        g_file_sink->set_pattern("[%Y-%m-%dT%H:%M:%S.%e%z] [%P:%t] [%l] [%s:%#] %v");
+    }
+}
 
 extern "C" logger_status_t logger_init(log_level_t console_level, const char* log_file, log_level_t file_level) {
+    if (!is_valid_level(console_level) || !is_valid_level(file_level)) {
+        return LOGGER_ERR_INVALID_ARG;
+    }
+
     std::lock_guard<std::mutex> lock(g_init_mutex);
 
     // If an existing custom logger is active, flush and drop it first
     if (g_is_initialized.load(std::memory_order_relaxed)) {
-        if (g_logger) g_logger->flush();
+        auto cur_logger = std::atomic_load(&g_logger);
+        if (cur_logger) cur_logger->flush();
         spdlog::drop("polyglot_cli");
         g_is_initialized.store(false, std::memory_order_release);
     }
@@ -62,20 +106,18 @@ extern "C" logger_status_t logger_init(log_level_t console_level, const char* lo
     std::vector<spdlog::sink_ptr> sinks;
 
     // 1. Console Sink (Strictly stderr)
-    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
-    console_sink->set_level(map_level(console_level));
-    console_sink->set_pattern("%^[%l]%$ %v");
+    g_console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+    g_console_sink->set_level(map_level(console_level));
+    g_console_sink->set_pattern("%^[%l]%$ %v");
+    apply_color_mode(g_color_mode.load(std::memory_order_relaxed));
 
-    // Compliance with NO_COLOR standard (https://no-color.org)
-    if (std::getenv("NO_COLOR") != nullptr) {
-        console_sink->set_color_mode(spdlog::color_mode::never);
-    }
-
-    sinks.push_back(console_sink);
+    sinks.push_back(g_console_sink);
     g_console_level.store(console_level, std::memory_order_release);
 
     // 2. File Sink (Optional rotating disk log)
     bool file_configured = false;
+    g_file_sink = nullptr;
+
     if (log_file && log_file[0] != '\0' && file_level != LOG_LVL_OFF) {
         try {
             // Ensure parent directory exists before creating log file
@@ -86,13 +128,12 @@ extern "C" logger_status_t logger_init(log_level_t console_level, const char* lo
             }
 
             // 10 MB per file, 3 rotated generations
-            auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            g_file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
                 log_file, 1024 * 1024 * 10, 3
             );
-            file_sink->set_level(map_level(file_level));
-            // ISO-8601 UTC/local timestamp, PID, ThreadID, Level, SourceLocation, Message
-            file_sink->set_pattern("[%Y-%m-%dT%H:%M:%S.%e%z] [%P:%t] [%l] [%s:%#] %v");
-            sinks.push_back(file_sink);
+            g_file_sink->set_level(map_level(file_level));
+            apply_file_format(g_format.load(std::memory_order_relaxed));
+            sinks.push_back(g_file_sink);
 
             file_configured = true;
             g_file_level.store(file_level, std::memory_order_release);
@@ -117,8 +158,8 @@ extern "C" logger_status_t logger_init(log_level_t console_level, const char* lo
         new_logger->set_level(spdlog::level::trace); // Root is permissive; individual sinks filter
         new_logger->flush_on(spdlog::level::warn);   // Flush automatically on warning or higher
 
-        g_logger = new_logger;
-        spdlog::set_default_logger(g_logger);
+        std::atomic_store(&g_logger, new_logger);
+        spdlog::set_default_logger(new_logger);
         g_is_initialized.store(true, std::memory_order_release);
     } catch (const spdlog::spdlog_ex& ex) {
         std::fprintf(stderr, "[error] Logger initialization failed: %s\n", ex.what());
@@ -128,15 +169,43 @@ extern "C" logger_status_t logger_init(log_level_t console_level, const char* lo
     return LOGGER_OK;
 }
 
+extern "C" logger_status_t logger_set_console_level(log_level_t level) {
+    if (!is_valid_level(level)) return LOGGER_ERR_INVALID_ARG;
+    g_console_level.store(level, std::memory_order_release);
+    if (g_console_sink) {
+        g_console_sink->set_level(map_level(level));
+    }
+    return LOGGER_OK;
+}
+
+extern "C" logger_status_t logger_set_file_level(log_level_t level) {
+    if (!is_valid_level(level)) return LOGGER_ERR_INVALID_ARG;
+    g_file_level.store(level, std::memory_order_release);
+    if (g_file_sink) {
+        g_file_sink->set_level(map_level(level));
+    }
+    return LOGGER_OK;
+}
+
+extern "C" void logger_set_color_mode(color_mode_t mode) {
+    g_color_mode.store(mode, std::memory_order_release);
+    apply_color_mode(mode);
+}
+
+extern "C" void logger_set_format(log_format_t format) {
+    g_format.store(format, std::memory_order_release);
+    apply_file_format(format);
+}
+
 extern "C" int logger_is_console_enabled(log_level_t level) {
-    if (level == LOG_LVL_OFF) return 0;
+    if (!is_valid_level(level) || level == LOG_LVL_OFF) return 0;
     log_level_t clvl = g_console_level.load(std::memory_order_relaxed);
     if (clvl == LOG_LVL_OFF) return 0;
     return (level >= clvl) ? 1 : 0;
 }
 
 extern "C" int logger_is_file_enabled(log_level_t level) {
-    if (level == LOG_LVL_OFF) return 0;
+    if (!is_valid_level(level) || level == LOG_LVL_OFF) return 0;
     if (!g_file_enabled.load(std::memory_order_relaxed)) return 0;
     log_level_t flvl = g_file_level.load(std::memory_order_relaxed);
     if (flvl == LOG_LVL_OFF) return 0;
@@ -152,7 +221,7 @@ extern "C" void logger_dispatch_loc(log_level_t level, const char* component,
                                     const char* message) {
     if (!logger_is_enabled(level)) return;
 
-    auto logger = g_logger;
+    auto logger = std::atomic_load(&g_logger);
     if (!logger) return;
 
     spdlog::level::level_enum lvl = map_level(level);
@@ -231,7 +300,7 @@ extern "C" void logger_dispatch_format(log_level_t level, const char* component,
 }
 
 extern "C" void logger_flush(void) {
-    auto logger = g_logger;
+    auto logger = std::atomic_load(&g_logger);
     if (logger) {
         logger->flush();
     }
@@ -239,14 +308,16 @@ extern "C" void logger_flush(void) {
 
 extern "C" void logger_shutdown(void) {
     std::lock_guard<std::mutex> lock(g_init_mutex);
-    if (g_logger) {
-        g_logger->flush();
+    auto cur_logger = std::atomic_load(&g_logger);
+    if (cur_logger) {
+        cur_logger->flush();
         if (g_is_initialized.load(std::memory_order_relaxed)) {
             spdlog::drop("polyglot_cli");
             g_is_initialized.store(false, std::memory_order_release);
         }
         // Retain fallback bootstrap logger so any late static destructors / teardown logs do not crash
-        g_logger = get_bootstrap_logger();
-        spdlog::set_default_logger(g_logger);
+        auto bootstrap = get_bootstrap_logger();
+        std::atomic_store(&g_logger, bootstrap);
+        spdlog::set_default_logger(bootstrap);
     }
 }

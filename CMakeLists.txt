@@ -19,6 +19,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Export compile commands for language servers and tooling
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Ensure position-independent code across all targets
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -45,6 +48,7 @@ endif()
 # Dependency Management: spdlog (System vs FetchContent)
 # ------------------------------------------------------------------------------
 option(POLYGLOT_USE_SYSTEM_SPDLOG "Search for system installed spdlog before FetchContent" OFF)
+set(POLYGLOT_SPDLOG_VERSION "v1.14.1" CACHE STRING "spdlog git release tag")
 
 if(POLYGLOT_USE_SYSTEM_SPDLOG)
     find_package(spdlog CONFIG QUIET)
@@ -60,7 +64,7 @@ if(NOT TARGET spdlog::spdlog)
     FetchContent_Declare(
         spdlog
         GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG        v1.14.1
+        GIT_TAG        ${POLYGLOT_SPDLOG_VERSION}
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(spdlog)
@@ -80,7 +84,7 @@ target_include_directories(polyglot_logger_core
 )
 
 target_link_libraries(polyglot_logger_core
-    PUBLIC
+    PRIVATE
         spdlog::spdlog
 )
 
@@ -113,12 +117,20 @@ if(HAVE_FORTRAN)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_Fortran_MODULE_DIRECTORY}>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
     )
 
     target_link_libraries(polyglot_logger_fortran
         PUBLIC
             polyglot_logger_core
     )
+
+    # Enable Fortran preprocessor for __FILE__ and __LINE__ source-location capture
+    if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+        target_compile_options(polyglot_logger_fortran PRIVATE -cpp)
+    elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
+        target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
+    endif()
 endif()
 
 # ------------------------------------------------------------------------------
@@ -218,17 +230,39 @@ if(HAVE_FORTRAN)
 endif()
 
 # ------------------------------------------------------------------------------
-# Installation Rules (Prerequisite for CPack)
+# Installation Rules & Reusable CMake Package Export
 # ------------------------------------------------------------------------------
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 install(TARGETS cli_tool
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT Application
 )
 
+# Export libraries for downstream find_package(PolyglotLog)
+set(EXPORT_TARGETS polyglot_logger_core)
+if(TARGET spdlog)
+    get_target_property(_is_imported spdlog IMPORTED)
+    if(NOT _is_imported)
+        list(APPEND EXPORT_TARGETS spdlog)
+    endif()
+endif()
+if(HAVE_FORTRAN)
+    list(APPEND EXPORT_TARGETS polyglot_logger_fortran)
+endif()
+
+install(TARGETS ${EXPORT_TARGETS}
+    EXPORT PolyglotLogTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT Development
+)
+
 install(FILES
     include/polyglot_log.h
+    include/polyglot_log.hpp
     include/c_subsystem.h
     include/fortran_solver.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
@@ -242,6 +276,40 @@ if(HAVE_FORTRAN)
         FILES_MATCHING PATTERN "*.mod"
     )
 endif()
+
+install(EXPORT PolyglotLogTargets
+    FILE PolyglotLogTargets.cmake
+    NAMESPACE PolyglotLog::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PolyglotLog
+    COMPONENT Development
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+# Create PolyglotLogConfig.cmake
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfig.cmake.in"
+"@PACKAGE_INIT@
+include(\"\${CMAKE_CURRENT_LIST_DIR}/PolyglotLogTargets.cmake\")
+check_required_components(PolyglotLog)
+"
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PolyglotLog
+)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/PolyglotLogConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/PolyglotLog
+    COMPONENT Development
+)
 
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
@@ -408,16 +476,64 @@ if(BUILD_TESTING)
         )
     endif()
 
-    # 15. Multi-threaded Concurrency Stress Test
+    # 15. Multi-threaded Concurrency Stress Test (Explicitly writes 1,600 logs to disk!)
+    set(TEST_THREAD_LOG "${CMAKE_CURRENT_BINARY_DIR}/test_multithreaded.log")
     add_test(
         NAME test_multithreaded_concurrency
         COMMAND ${CMAKE_COMMAND}
             -DCLI_EXE=$<TARGET_FILE:test_multithreaded>
+            "-DCLI_ARGS=${TEST_THREAD_LOG}"
             -DEXPECT_STDOUT=MULTITHREADED_TEST_SUCCESS
+            -DEXPECT_FILE=${TEST_THREAD_LOG}
+            "-DEXPECT_FILE_REGEX=Worker 7.*199"
             -P ${TEST_DRIVER}
     )
 
-    # 16. Standalone Examples Stream Isolation Tests
+    # 16. Color Mode Flags (--color=never and --color=always)
+    add_test(
+        NAME test_color_mode_flags
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            -DCLI_ARGS=--color=never
+            -DEXPECT_STDERR=\\[info\\]
+            -P ${TEST_DRIVER}
+    )
+
+    # 17. Structured JSON Log Format (--log-format=json)
+    set(TEST_JSON_LOG "${CMAKE_CURRENT_BINARY_DIR}/test_json.log")
+    add_test(
+        NAME test_json_log_format
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=-l ${TEST_JSON_LOG} --log-format=json"
+            -DEXPECT_FILE=${TEST_JSON_LOG}
+            "-DEXPECT_FILE_REGEX=\\{\"timestamp\":\".*\",\"pid\":.*,\"level\":\"info\""
+            -P ${TEST_DRIVER}
+    )
+
+    # 18. Positional Arguments & End-of-Options Delimiter (--)
+    add_test(
+        NAME test_positional_arguments_and_delimiter
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=-v -- input.mesh output.h5"
+            -DEXPECT_STDOUT=^COMPUTATION_SUCCESS: 42$
+            -DEXPECT_STDERR=\\[debug\\].*Received 2 positional arguments
+            -P ${TEST_DRIVER}
+    )
+
+    # 19. Failure-Path Validation: Invalid Log Level Flag
+    add_test(
+        NAME test_invalid_log_level_error
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=--log-level nonsense"
+            -DEXPECT_EXIT_CODE=1
+            -DEXPECT_STDERR=Invalid log level
+            -P ${TEST_DRIVER}
+    )
+
+    # 20. Standalone Examples Stream Isolation Tests
     if(BUILD_EXAMPLES)
         add_test(
             NAME test_standalone_c
@@ -480,6 +596,8 @@ set(CPACK_STRIP_FILES TRUE)
 
 if(WIN32)
     set(CPACK_GENERATOR "ZIP;TGZ")
+elseif(APPLE)
+    set(CPACK_GENERATOR "TGZ;TXZ")
 else()
     set(CPACK_GENERATOR "TGZ;TXZ;DEB")
 endif()

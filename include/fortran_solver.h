@@ -10,8 +10,10 @@ extern "C" {
  *
  * Demonstrates logging from Fortran 2008 using the ISO_C_BINDING module
  * and the polyglot logging C ABI.
+ *
+ * @return 0 on convergence/success, non-zero on numerical failure.
  */
-void run_fortran_solver(void);
+int run_fortran_solver(void);
 
 #ifdef __cplusplus
 }

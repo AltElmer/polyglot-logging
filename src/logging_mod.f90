@@ -1,5 +1,5 @@
 module logging_mod
-    use, intrinsic :: iso_c_binding, only: c_int, c_char, c_null_char
+    use, intrinsic :: iso_c_binding, only: c_int, c_char, c_null_char, c_double
     implicit none
     private
 
@@ -66,7 +66,7 @@ contains
                              trim(message) // c_null_char)
     end subroutine f_log
 
-    !> Safe Fortran logging with explicit source coordinates
+    !> Safe Fortran logging with explicit caller source coordinates
     subroutine f_log_loc(level, component, file, line, message)
         integer(c_int), intent(in)   :: level
         character(len=*), intent(in) :: component
@@ -87,33 +87,38 @@ contains
         integer(c_int), intent(in)   :: level
         character(len=*), intent(in) :: component
         integer, intent(in)          :: iter
-        real(8), intent(in)          :: residual
+        real(c_double), intent(in)   :: residual
         character(len=128)           :: buffer
 
         if (.not. f_log_enabled(level)) return
 
         write(buffer, '(A, I0, A, ES10.3)') "Iteration ", iter, ": Residual norm = ", residual
-        call f_log(level, component, trim(buffer))
+        call f_log_loc(level, component, __FILE__, __LINE__, trim(buffer))
     end subroutine f_log_iteration
 
     !> Demonstrates a numerical computation routine written in Fortran interoperating with C ABI
-    subroutine run_fortran_solver() bind(c, name="run_fortran_solver")
+    function run_fortran_solver() result(rc) bind(c, name="run_fortran_solver")
         implicit none
-        real(8) :: res1, res2
+        integer(c_int) :: rc
+        real(c_double) :: res1, res2
 
-        call f_log(LOG_LVL_INFO, "Fortran-Solver", "Initializing Krylov subspace iterative solver")
+        rc = 0
+        call f_log_loc(LOG_LVL_INFO, "Fortran-Solver", __FILE__, __LINE__, &
+                       "Initializing Krylov subspace iterative solver")
 
         res1 = 1.42d-02
         call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 1, res1)
 
         if (f_log_enabled(LOG_LVL_TRACE)) then
-            call f_log(LOG_LVL_TRACE, "Fortran-Solver", "Vector dot product <r, r> = 2.0164e-04")
+            call f_log_loc(LOG_LVL_TRACE, "Fortran-Solver", __FILE__, __LINE__, &
+                           "Vector dot product <r, r> = 2.0164e-04")
         end if
 
         res2 = 8.15d-06
         call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 2, res2)
 
-        call f_log(LOG_LVL_INFO, "Fortran-Solver", "Solver converged in 2 iterations (tol=1.0e-05)")
-    end subroutine run_fortran_solver
+        call f_log_loc(LOG_LVL_INFO, "Fortran-Solver", __FILE__, __LINE__, &
+                       "Solver converged in 2 iterations (tol=1.0e-05)")
+    end function run_fortran_solver
 
 end module logging_mod

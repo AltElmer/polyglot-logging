@@ -38,6 +38,9 @@ jobs:
         run: ${{ matrix.install_cmd }}
 
       - name: Configure CMake
+        env:
+          CC: ${{ matrix.compiler == 'clang' && 'clang' || (matrix.compiler == 'gcc' && 'gcc' || '') }}
+          CXX: ${{ matrix.compiler == 'clang' && 'clang++' || (matrix.compiler == 'gcc' && 'g++' || '') }}
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
