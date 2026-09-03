@@ -1,5 +1,6 @@
 # Polyglot CLI Logging Reference Implementation (C / C++ / Fortran)
 
+[![CI](https://github.com/AltElmer/polyglot-logging/actions/workflows/ci.yml/badge.svg)](https://github.com/AltElmer/polyglot-logging/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Standard](https://img.shields.io/badge/C-11-blue.svg)](https://en.cppreference.com/w/c/11)
 [![Standard](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
