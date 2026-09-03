@@ -44,6 +44,11 @@ if(ENABLE_FORTRAN)
     endif()
 endif()
 
+option(POLYGLOT_BUILD_STATIC "Build monolithic static binaries with static runtime" OFF)
+if(POLYGLOT_BUILD_STATIC AND MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # ------------------------------------------------------------------------------
 # Dependency Management: spdlog (System vs FetchContent)
 # ------------------------------------------------------------------------------
@@ -135,6 +140,9 @@ if(HAVE_FORTRAN)
     elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
         if(WIN32)
             target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
+            if(POLYGLOT_BUILD_STATIC)
+                target_compile_options(polyglot_logger_fortran PRIVATE /libs:static /threads)
+            endif()
         else()
             target_compile_options(polyglot_logger_fortran PRIVATE -fpp)
         endif()
@@ -144,8 +152,6 @@ endif()
 # ------------------------------------------------------------------------------
 # Target 4: Main CLI Application Executable
 # ------------------------------------------------------------------------------
-option(POLYGLOT_BUILD_STATIC "Build monolithic static binaries with static runtime" OFF)
-
 add_executable(cli_tool
     src/main.cpp
 )
@@ -157,7 +163,7 @@ set_target_properties(cli_tool PROPERTIES
 
 if(POLYGLOT_BUILD_STATIC)
     if(MSVC)
-        set_property(TARGET cli_tool PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_link_options(cli_tool PRIVATE /NODEFAULTLIB:msvcrt.lib /NODEFAULTLIB:msvcrtd.lib)
     elseif(MINGW)
         target_link_options(cli_tool PRIVATE -static -static-libgcc -static-libstdc++)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
