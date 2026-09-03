@@ -309,22 +309,24 @@ jobs:
       - name: Enable MSVC Dev Environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build Monolithic Static Executable (/MT)
+      - name: Configure CMake (/MT)
         env:
           CC: cl
           CXX: cl
           FC: ifx
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_FORTRAN=ON \
-            -DPOLYGLOT_BUILD_STATIC=ON \
-            -DBUILD_TESTING=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DCMAKE_C_COMPILER=cl \
-            -DCMAKE_CXX_COMPILER=cl \
-            -DCMAKE_Fortran_COMPILER=ifx
-          cmake --build build --target cli_tool
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_FORTRAN=ON
+          -DPOLYGLOT_BUILD_STATIC=ON
+          -DBUILD_TESTING=OFF
+          -DBUILD_EXAMPLES=OFF
+          -DCMAKE_C_COMPILER=cl
+          -DCMAKE_CXX_COMPILER=cl
+          -DCMAKE_Fortran_COMPILER=ifx
+
+      - name: Compile Executable
+        run: cmake --build build --target cli_tool
 
       - name: Prepare Standalone Executable
         run: |
