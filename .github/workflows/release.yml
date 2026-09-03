@@ -10,70 +10,199 @@ permissions:
   contents: write
 
 jobs:
-  build-release-artifacts:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 1. Linux x86_64 Monolithic
-          - target: linux-x86_64
-            os: ubuntu-latest
-            archive: polyglot-cli-linux-x86_64.tar.gz
-            type: tar
-
-          # 2. Linux ARM64 (aarch64) Monolithic
-          - target: linux-aarch64
-            os: ubuntu-24.04-arm
-            archive: polyglot-cli-linux-aarch64.tar.gz
-            type: tar
-
-          # 3. macOS ARM64 (Apple Silicon)
-          - target: macos-arm64
-            os: macos-latest
-            archive: polyglot-cli-macos-arm64.tar.gz
-            type: tar
-
-          # 4. Windows x86_64 Monolithic (MSYS2 UCRT64 Static)
-          - target: windows-x86_64
-            os: windows-latest
-            archive: polyglot-cli-windows-x86_64.zip
-            type: zip
-
+  # ============================================================================
+  # 1. Linux x86_64 (GCC) - Monolithic Executable & Archive
+  # ============================================================================
+  build-linux-x86_64-gcc:
+    name: Build Linux x86_64 (GCC)
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      # --- Linux Toolchain Setup ---
-      - name: Install Linux Dependencies
-        if: runner.os == 'Linux'
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build gcc g++ gfortran
 
-      # --- macOS Toolchain Setup ---
-      - name: Install macOS Dependencies
-        if: runner.os == 'macOS'
+      - name: Build Monolithic Static Binary
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build build --target cli_tool
+
+      - name: Prepare Binaries and Archive
+        run: |
+          mkdir -p dist
+          # 1. Standalone raw executable binaries (download and run directly)
+          cp build/polyglot-cli polyglot-cli-linux-x86_64
+          cp build/polyglot-cli polyglot-cli-linux-x86_64-gcc
+          chmod +x polyglot-cli-linux-x86_64 polyglot-cli-linux-x86_64-gcc
+
+          # 2. Packaged tarball distribution
+          cp build/polyglot-cli dist/
+          cp LICENSE README.md dist/
+          tar -czvf polyglot-cli-linux-x86_64.tar.gz -C dist .
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-gcc
+          path: |
+            polyglot-cli-linux-x86_64
+            polyglot-cli-linux-x86_64-gcc
+            polyglot-cli-linux-x86_64.tar.gz
+
+  # ============================================================================
+  # 2. Linux x86_64 (Clang) - Monolithic Executable
+  # ============================================================================
+  build-linux-x86_64-clang:
+    name: Build Linux x86_64 (Clang)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang gfortran
+
+      - name: Build Monolithic Binary
+        env:
+          CC: clang
+          CXX: clang++
+          FC: gfortran
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_Fortran_COMPILER=gfortran
+          cmake --build build --target cli_tool
+
+      - name: Prepare Binary
+        run: |
+          cp build/polyglot-cli polyglot-cli-linux-x86_64-clang
+          chmod +x polyglot-cli-linux-x86_64-clang
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-clang
+          path: polyglot-cli-linux-x86_64-clang
+
+  # ============================================================================
+  # 3. Linux x86_64 (Intel oneAPI) - Monolithic Executable
+  # ============================================================================
+  build-linux-x86_64-intel:
+    name: Build Linux x86_64 (Intel oneAPI)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Setup Intel oneAPI Compilers
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: intel
+
+      - name: Build Monolithic Binary
+        env:
+          CC: icx
+          CXX: icpx
+          FC: ifx
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DCMAKE_Fortran_COMPILER=ifx
+          cmake --build build --target cli_tool
+
+      - name: Prepare Binary
+        run: |
+          cp build/polyglot-cli polyglot-cli-linux-x86_64-intel
+          chmod +x polyglot-cli-linux-x86_64-intel
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-intel
+          path: polyglot-cli-linux-x86_64-intel
+
+  # ============================================================================
+  # 4. Linux ARM64 (aarch64 GCC) - Monolithic Executable & Archive
+  # ============================================================================
+  build-linux-aarch64:
+    name: Build Linux ARM64 (aarch64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc g++ gfortran
+
+      - name: Build Monolithic Static Binary
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build build --target cli_tool
+
+      - name: Prepare Binaries and Archive
+        run: |
+          mkdir -p dist
+          # Raw standalone executable
+          cp build/polyglot-cli polyglot-cli-linux-aarch64
+          chmod +x polyglot-cli-linux-aarch64
+
+          # Packaged tarball distribution
+          cp build/polyglot-cli dist/
+          cp LICENSE README.md dist/
+          tar -czvf polyglot-cli-linux-aarch64.tar.gz -C dist .
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64
+          path: |
+            polyglot-cli-linux-aarch64
+            polyglot-cli-linux-aarch64.tar.gz
+
+  # ============================================================================
+  # 5. macOS Apple Silicon (ARM64 Clang) - Monolithic Executable & Archive
+  # ============================================================================
+  build-macos-arm64:
+    name: Build macOS Apple Silicon (ARM64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
         run: |
           brew install ninja gcc
 
-      # --- Windows Toolchain Setup (MSYS2 UCRT64) ---
-      - name: Setup MSYS2 UCRT64
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-gcc-fortran
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-cmake
-            zip
-
-      # --- Build on Linux / macOS ---
-      - name: Build Monolithic Binary (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Build Monolithic Binary
         env:
           FC: gfortran
         run: |
@@ -86,9 +215,48 @@ jobs:
             -DCMAKE_Fortran_COMPILER=gfortran
           cmake --build build --target cli_tool
 
-      # --- Build on Windows (MSYS2 UCRT64) ---
-      - name: Build Monolithic Binary (Windows MSYS2)
-        if: runner.os == 'Windows'
+      - name: Prepare Binaries and Archive
+        run: |
+          mkdir -p dist
+          # Raw standalone executable
+          cp build/polyglot-cli polyglot-cli-macos-arm64
+          chmod +x polyglot-cli-macos-arm64
+
+          # Packaged tarball distribution
+          cp build/polyglot-cli dist/
+          cp LICENSE README.md dist/
+          tar -czvf polyglot-cli-macos-arm64.tar.gz -C dist .
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            polyglot-cli-macos-arm64
+            polyglot-cli-macos-arm64.tar.gz
+
+  # ============================================================================
+  # 6. Windows x86_64 (MSYS2 UCRT64 GCC) - Monolithic Standalone .exe & Zip
+  # ============================================================================
+  build-windows-x86_64-msys2:
+    name: Build Windows x86_64 (MSYS2 UCRT64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-cmake
+            zip
+
+      - name: Build Monolithic Static Executable
         shell: msys2 {0}
         run: |
           cmake -B build -G Ninja \
@@ -99,33 +267,88 @@ jobs:
             -DBUILD_EXAMPLES=OFF
           cmake --build build --target cli_tool
 
-      # --- Package Artifacts ---
-      - name: Package Release (tar.gz)
-        if: matrix.type == 'tar'
-        run: |
-          mkdir -p dist
-          cp build/polyglot-cli dist/
-          cp LICENSE README.md dist/
-          tar -czvf ${{ matrix.archive }} -C dist .
-
-      - name: Package Release (zip)
-        if: matrix.type == 'zip'
+      - name: Prepare Standalone Executables and Zip
         shell: msys2 {0}
         run: |
           mkdir -p dist
+          # Standalone raw executable files (download and run directly!)
+          cp build/polyglot-cli.exe polyglot-cli-windows-x86_64.exe
+          cp build/polyglot-cli.exe polyglot-cli-windows-x86_64-msys2.exe
+
+          # Packaged zip distribution
           cp build/polyglot-cli.exe dist/
           cp LICENSE README.md dist/
-          cd dist && zip -r ../${{ matrix.archive }} *
+          cd dist && zip -r ../polyglot-cli-windows-x86_64.zip *
 
-      - name: Upload Build Artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: ${{ matrix.archive }}
+          name: windows-x86_64-msys2
+          path: |
+            polyglot-cli-windows-x86_64.exe
+            polyglot-cli-windows-x86_64-msys2.exe
+            polyglot-cli-windows-x86_64.zip
 
+  # ============================================================================
+  # 7. Windows x86_64 (MSVC + Intel Fortran ifx) - Monolithic Standalone .exe
+  # ============================================================================
+  build-windows-x86_64-msvc:
+    name: Build Windows x86_64 (MSVC + Intel ifx)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Intel oneAPI Compilers
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: intel
+
+      - name: Setup Ninja
+        run: choco install ninja
+
+      - name: Enable MSVC Dev Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Monolithic Static Executable (/MT)
+        env:
+          CC: cl
+          CXX: cl
+          FC: ifx
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER=cl \
+            -DCMAKE_CXX_COMPILER=cl \
+            -DCMAKE_Fortran_COMPILER=ifx
+          cmake --build build --target cli_tool
+
+      - name: Prepare Standalone Executable
+        run: |
+          cp build/polyglot-cli.exe polyglot-cli-windows-x86_64-msvc.exe
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64-msvc
+          path: polyglot-cli-windows-x86_64-msvc.exe
+
+  # ============================================================================
+  # 8. Publish GitHub Release with Raw Executables, Archives & Checksums
+  # ============================================================================
   publish-release:
     name: Publish GitHub Release
-    needs: build-release-artifacts
+    needs:
+      - build-linux-x86_64-gcc
+      - build-linux-x86_64-clang
+      - build-linux-x86_64-intel
+      - build-linux-aarch64
+      - build-macos-arm64
+      - build-windows-x86_64-msys2
+      - build-windows-x86_64-msvc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +363,7 @@ jobs:
         working-directory: release-assets
         run: |
           sha256sum * > SHA256SUMS.txt
+          echo "=== SHA256SUMS ==="
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
