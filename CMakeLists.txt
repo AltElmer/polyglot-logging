@@ -133,7 +133,11 @@ if(HAVE_FORTRAN)
             target_link_libraries(polyglot_logger_fortran INTERFACE gfortran)
         endif()
     elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
-        target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
+        if(WIN32)
+            target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
+        else()
+            target_compile_options(polyglot_logger_fortran PRIVATE -fpp)
+        endif()
     endif()
 endif()
 
@@ -156,7 +160,7 @@ if(POLYGLOT_BUILD_STATIC)
         set_property(TARGET cli_tool PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     elseif(MINGW)
         target_link_options(cli_tool PRIVATE -static -static-libgcc -static-libstdc++)
-    elseif(UNIX)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_options(cli_tool PRIVATE -static-libgcc -static-libstdc++)
         if(HAVE_FORTRAN AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
             target_link_options(cli_tool PRIVATE -static-libgfortran)
@@ -242,9 +246,15 @@ if(HAVE_FORTRAN)
             -Wall -Wextra -Wimplicit-interface -fimplicit-none
         )
     elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
-        target_compile_options(polyglot_logger_fortran PRIVATE
-            /warn:all /stand:f08
-        )
+        if(WIN32)
+            target_compile_options(polyglot_logger_fortran PRIVATE
+                /warn:all /stand:f08
+            )
+        else()
+            target_compile_options(polyglot_logger_fortran PRIVATE
+                -warn all -stand f08
+            )
+        endif()
     endif()
 endif()
 

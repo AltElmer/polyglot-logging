@@ -36,7 +36,7 @@ jobs:
             type: tar
 
           # 4. macOS x86_64 (Intel Mac)
-          - target: macos-x86_64
+          - target: macos-13
             os: macos-13
             archive: polyglot-cli-macos-x86_64.tar.gz
             type: tar
@@ -80,13 +80,16 @@ jobs:
       # --- Build on Linux / macOS ---
       - name: Build Monolithic Binary (Linux / macOS)
         if: runner.os != 'Windows'
+        env:
+          FC: gfortran
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_FORTRAN=ON \
             -DPOLYGLOT_BUILD_STATIC=ON \
             -DBUILD_TESTING=OFF \
-            -DBUILD_EXAMPLES=OFF
+            -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_Fortran_COMPILER=gfortran
           cmake --build build --target cli_tool
 
       # --- Build on Windows (MSYS2 UCRT64) ---
