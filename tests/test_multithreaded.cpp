@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::thread> workers;
 
     for (int t = 0; t < num_threads; ++t) {
-        workers.emplace_back([t, msgs_per_thread]() {
+        workers.emplace_back([t]() {
             for (int m = 0; m < msgs_per_thread; ++m) {
                 if (m % 3 == 0) {
                     LOGF_INFO("ThreadTest", "Worker %d emitting informational event %d", t, m);
