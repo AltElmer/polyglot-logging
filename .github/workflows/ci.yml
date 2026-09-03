@@ -5,51 +5,142 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
-    name: ${{ matrix.os }} / ${{ matrix.compiler }} (Fortran=${{ matrix.enable_fortran }})
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} (Fortran=ON)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
+          # 1. Ubuntu Linux + GCC + GFortran
           - os: ubuntu-latest
             compiler: gcc
             enable_fortran: ON
-            install_cmd: sudo apt-get update && sudo apt-get install -y ninja-build gfortran gcc g++
+            c_compiler: gcc
+            cxx_compiler: g++
+            fortran_compiler: gfortran
+
+          # 2. Ubuntu Linux + Clang + GFortran (Mixed Toolchain)
           - os: ubuntu-latest
             compiler: clang
-            enable_fortran: OFF
-            install_cmd: sudo apt-get update && sudo apt-get install -y ninja-build clang
+            enable_fortran: ON
+            c_compiler: clang
+            cxx_compiler: clang++
+            fortran_compiler: gfortran
+
+          # 3. Ubuntu Linux + Intel oneAPI (icx, icpx, ifx)
+          - os: ubuntu-latest
+            compiler: intel
+            enable_fortran: ON
+            c_compiler: icx
+            cxx_compiler: icpx
+            fortran_compiler: ifx
+
+          # 4. macOS ARM64 (Apple Silicon) + Clang + GFortran
           - os: macos-latest
             compiler: clang
             enable_fortran: ON
-            install_cmd: brew install ninja gcc
+            c_compiler: clang
+            cxx_compiler: clang++
+            fortran_compiler: gfortran
+
+          # 5. Windows Server + MSYS2 UCRT64 (GCC + GFortran)
           - os: windows-latest
-            compiler: msvc
-            enable_fortran: OFF
-            install_cmd: choco install ninja
+            compiler: msys2-ucrt64
+            enable_fortran: ON
+
+          # 6. Windows Server + MSVC + Intel Fortran (ifx)
+          - os: windows-latest
+            compiler: msvc-intel
+            enable_fortran: ON
+            c_compiler: cl
+            cxx_compiler: cl
+            fortran_compiler: ifx
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: ${{ matrix.install_cmd }}
+      # --- Linux Dependency Setup ---
+      - name: Install Linux Dependencies (GCC / Clang)
+        if: runner.os == 'Linux' && matrix.compiler != 'intel'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gfortran gcc g++ clang
 
+      # --- Intel oneAPI Setup (Linux & Windows) ---
+      - name: Setup Intel oneAPI Compilers
+        if: matrix.compiler == 'intel' || matrix.compiler == 'msvc-intel'
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: intel
+
+      # --- macOS Dependency Setup ---
+      - name: Install macOS Dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja gcc
+
+      # --- Windows MSYS2 UCRT64 Setup ---
+      - name: Setup MSYS2 UCRT64
+        if: matrix.compiler == 'msys2-ucrt64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-cmake
+
+      # --- Windows MSVC Tools Setup ---
+      - name: Setup Windows MSVC Ninja
+        if: matrix.compiler == 'msvc-intel'
+        run: choco install ninja
+
+      - name: Enable MSVC Dev Environment
+        if: matrix.compiler == 'msvc-intel'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # --- Build & Test (MSYS2) ---
+      - name: Configure, Build & Test (MSYS2 UCRT64)
+        if: matrix.compiler == 'msys2-ucrt64'
+        shell: msys2 {0}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DENABLE_FORTRAN=ON \
+            -DPOLYGLOT_BUILD_STATIC=ON
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      # --- Build & Test (Standard Runners: Linux, macOS, Windows MSVC) ---
       - name: Configure CMake
+        if: matrix.compiler != 'msys2-ucrt64'
         env:
-          CC: ${{ matrix.compiler == 'clang' && 'clang' || (matrix.compiler == 'gcc' && 'gcc' || '') }}
-          CXX: ${{ matrix.compiler == 'clang' && 'clang++' || (matrix.compiler == 'gcc' && 'g++' || '') }}
+          CC: ${{ matrix.c_compiler }}
+          CXX: ${{ matrix.cxx_compiler }}
+          FC: ${{ matrix.fortran_compiler }}
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
           -DBUILD_EXAMPLES=ON
-          -DENABLE_FORTRAN=${{ matrix.enable_fortran }}
+          -DENABLE_FORTRAN=ON
+          -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx_compiler }}
+          -DCMAKE_Fortran_COMPILER=${{ matrix.fortran_compiler }}
 
       - name: Build All Targets
+        if: matrix.compiler != 'msys2-ucrt64'
         run: cmake --build build
 
       - name: Run CTest Test Suite
+        if: matrix.compiler != 'msys2-ucrt64'
         run: ctest --test-dir build --output-on-failure

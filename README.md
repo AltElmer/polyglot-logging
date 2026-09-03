@@ -151,13 +151,21 @@ Defaults  ──►  Environment Variables  ──►  CLI Arguments (Highest Pr
 
 ## 4. Building and Running
 
-### Prerequisites
-- CMake >= 3.24
-- C11 and C++17 compliant compiler (GCC, Clang, or MSVC)
-- Fortran 2008 compiler (GFortran, Intel `ifx`, or LLVM `flang`) — *optional; builds C/C++ if absent*
-- Ninja or Make
+### Supported Toolchains & Compilers (Fortran Enabled Everywhere)
+- **GCC Toolchain**: GCC 11+ (C11, C++17) + GFortran 11+ (Linux, macOS, Windows via MSYS2 UCRT64)
+- **LLVM / Clang**: Clang 16+ (C11, C++17) + GFortran runtime linkage (Linux, macOS)
+- **Intel oneAPI**: Intel `icx` / `icpx` + Intel Fortran `ifx` (Linux, Windows)
+- **Microsoft Visual Studio**: MSVC 2019/2022 + Intel Fortran `ifx` (Windows)
+- **MSYS2 UCRT64**: Native Windows MinGW-w64 GCC 15 + GFortran 15 (standalone portable binaries)
 
-### Build Steps
+### Monolithic Portable Static Binaries
+To build completely self-contained binaries with zero dynamic runtime compiler dependencies:
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPOLYGLOT_BUILD_STATIC=ON
+cmake --build build --target cli_tool
+```
+
+### Build Steps (Standard)
 
 ```bash
 # Configure build with tests and examples enabled

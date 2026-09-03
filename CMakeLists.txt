@@ -128,6 +128,10 @@ if(HAVE_FORTRAN)
     # Enable Fortran preprocessor for __FILE__ and __LINE__ source-location capture
     if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
         target_compile_options(polyglot_logger_fortran PRIVATE -cpp -ffree-line-length-none)
+        # When C++ linker is not GNU g++ (e.g. clang++ or Intel icpx), explicitly link gfortran runtime
+        if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            target_link_libraries(polyglot_logger_fortran INTERFACE gfortran)
+        endif()
     elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel|IntelLLVM")
         target_compile_options(polyglot_logger_fortran PRIVATE /fpp)
     endif()
@@ -136,6 +140,8 @@ endif()
 # ------------------------------------------------------------------------------
 # Target 4: Main CLI Application Executable
 # ------------------------------------------------------------------------------
+option(POLYGLOT_BUILD_STATIC "Build monolithic static binaries with static runtime" OFF)
+
 add_executable(cli_tool
     src/main.cpp
 )
@@ -144,6 +150,19 @@ set_target_properties(cli_tool PROPERTIES
     OUTPUT_NAME "polyglot-cli"
     LINKER_LANGUAGE CXX
 )
+
+if(POLYGLOT_BUILD_STATIC)
+    if(MSVC)
+        set_property(TARGET cli_tool PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    elseif(MINGW)
+        target_link_options(cli_tool PRIVATE -static -static-libgcc -static-libstdc++)
+    elseif(UNIX)
+        target_link_options(cli_tool PRIVATE -static-libgcc -static-libstdc++)
+        if(HAVE_FORTRAN AND CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+            target_link_options(cli_tool PRIVATE -static-libgfortran)
+        endif()
+    endif()
+endif()
 
 target_link_libraries(cli_tool
     PRIVATE
