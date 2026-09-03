@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} (Fortran=${{ matrix.enable_fortran }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            enable_fortran: ON
+            install_cmd: sudo apt-get update && sudo apt-get install -y ninja-build gfortran gcc g++
+          - os: ubuntu-latest
+            compiler: clang
+            enable_fortran: OFF
+            install_cmd: sudo apt-get update && sudo apt-get install -y ninja-build clang
+          - os: macos-latest
+            compiler: clang
+            enable_fortran: ON
+            install_cmd: brew install ninja gcc
+          - os: windows-latest
+            compiler: msvc
+            enable_fortran: OFF
+            install_cmd: choco install ninja
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: ${{ matrix.install_cmd }}
+
+      - name: Configure CMake
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DBUILD_EXAMPLES=ON
+          -DENABLE_FORTRAN=${{ matrix.enable_fortran }}
+
+      - name: Build All Targets
+        run: cmake --build build
+
+      - name: Run CTest Test Suite
+        run: ctest --test-dir build --output-on-failure

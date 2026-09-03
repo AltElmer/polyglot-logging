@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
@@ -8,8 +9,8 @@
  * @brief Zero-dependency C99 canonical dual-sink CLI logging MWE.
  *
  * Demonstrates strict stream separation (data to stdout, diagnostics to stderr),
- * dual-sink logging (interactive stderr + forensic timestamped file), and
- * standard CLI verbosity flags (-v, -l).
+ * dual-sink logging (interactive stderr + forensic timestamped file), thread-safe
+ * time extraction, and standard CLI verbosity flags (-v, -l).
  */
 
 enum { LOG_INFO, LOG_DEBUG };
@@ -35,7 +36,13 @@ void log_msg(int level, const char *fmt, ...) {
     if (g_log_file) {
         time_t now = time(NULL);
         char tbuf[20];
-        strftime(tbuf, sizeof(tbuf), "%H:%M:%S", localtime(&now));
+        struct tm tm_buf;
+#if defined(_WIN32)
+        localtime_s(&tm_buf, &now);
+#else
+        localtime_r(&now, &tm_buf);
+#endif
+        strftime(tbuf, sizeof(tbuf), "%H:%M:%S", &tm_buf);
 
         va_start(args, fmt);
         fprintf(g_log_file, "%s [%s] ", tbuf, level == LOG_DEBUG ? "DEBUG" : "INFO");

@@ -23,6 +23,14 @@ else()
     set(ARG_LIST "")
 endif()
 
+# Set environment variables for the child process
+if(TEST_ENV)
+    string(REGEX MATCH "^([^=]+)=(.*)$" _match "${TEST_ENV}")
+    if(_match)
+        set(ENV{${CMAKE_MATCH_1}} "${CMAKE_MATCH_2}")
+    endif()
+endif()
+
 # Execute CLI binary directly via process API (no shell interception)
 execute_process(
     COMMAND "${CLI_EXE}" ${ARG_LIST}

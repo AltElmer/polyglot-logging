@@ -10,6 +10,7 @@ extern "C" {
 
 /**
  * @brief Standardized log severity levels across all language layers.
+ * Lower numeric value = higher verbosity; higher numeric value = higher severity.
  */
 typedef enum {
     LOG_LVL_TRACE = 0,
@@ -17,31 +18,53 @@ typedef enum {
     LOG_LVL_INFO  = 2,
     LOG_LVL_WARN  = 3,
     LOG_LVL_ERROR = 4,
-    LOG_LVL_FATAL = 5
+    LOG_LVL_FATAL = 5,
+    LOG_LVL_OFF   = 6  /**< Silences all output for the designated sink */
 } log_level_t;
+
+/**
+ * @brief Status return codes for logger operations.
+ */
+typedef enum {
+    LOGGER_OK                =  0,
+    LOGGER_ERR_INVALID_ARG   = -1,
+    LOGGER_ERR_FILE_OPEN     = -2,
+    LOGGER_ERR_INIT          = -3
+} logger_status_t;
 
 /**
  * @brief Initialize the unified dual-sink logging engine.
  *
  * Configures the console sink (stderr) and optional file sink with independent
- * filtering thresholds.
+ * filtering thresholds. Ensures parent directories exist for the log file.
  *
  * @param console_level Minimum severity level for console output (stderr).
  * @param log_file Path to destination log file on disk (NULL or empty string disables file sink).
  * @param file_level Minimum severity level for file logging (ignored if log_file is NULL).
+ * @return LOGGER_OK on success, or a negative logger_status_t code on error.
  */
-void logger_init(log_level_t console_level, const char* log_file, log_level_t file_level);
+logger_status_t logger_init(log_level_t console_level, const char* log_file, log_level_t file_level);
 
 /**
- * @brief Check if a given log level is actively accepted by any configured sink.
+ * @brief Check if a given log level is actively accepted by ANY configured sink.
  *
- * Allows callers to perform fast-path rejection before paying the cost of
- * expensive string formatting or numerical serialization.
+ * Checks against active sink levels (console_level and file_level), allowing callers
+ * to perform true fast-path rejection before expensive computations or string conversions.
  *
  * @param level Severity level to check.
- * @return 1 if any sink accepts the level; 0 otherwise.
+ * @return 1 if any active sink accepts the level; 0 otherwise.
  */
 int logger_is_enabled(log_level_t level);
+
+/**
+ * @brief Check if a given log level is accepted specifically by the console sink (stderr).
+ */
+int logger_is_console_enabled(log_level_t level);
+
+/**
+ * @brief Check if a given log level is accepted specifically by the file sink.
+ */
+int logger_is_file_enabled(log_level_t level);
 
 /**
  * @brief Dispatch a diagnostic log event through the unified logging core.
@@ -53,13 +76,24 @@ int logger_is_enabled(log_level_t level);
 void logger_dispatch(log_level_t level, const char* component, const char* message);
 
 /**
- * @brief Formatted diagnostic dispatch helper for pure C callers.
+ * @brief Source-location-aware diagnostic dispatch function.
  *
- * Evaluates arguments once into an intermediate stack buffer before dispatching.
+ * Records origin file, line, and function for deep forensic file logging.
  *
- * @param level Severity level of the log message.
+ * @param level Severity level.
  * @param component Component or module name.
- * @param fmt Standard printf-style format string.
+ * @param file Source file name (__FILE__).
+ * @param line Source line number (__LINE__).
+ * @param func Enclosing function name (__func__).
+ * @param message Pre-formatted log message body.
+ */
+void logger_dispatch_loc(log_level_t level, const char* component,
+                         const char* file, int line, const char* func,
+                         const char* message);
+
+/**
+ * @brief Formatted diagnostic dispatch helper for pure C callers.
+ * Evaluates format arguments into an intermediate buffer before dispatching.
  */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((format(printf, 3, 4)))
@@ -67,22 +101,46 @@ __attribute__((format(printf, 3, 4)))
 void logger_dispatch_format(log_level_t level, const char* component, const char* fmt, ...);
 
 /**
- * @brief Flush all pending log buffers and gracefully terminate sinks.
+ * @brief Formatted diagnostic dispatch with caller source location.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 6, 7)))
+#endif
+void logger_dispatch_format_loc(log_level_t level, const char* component,
+                                const char* file, int line, const char* func,
+                                const char* fmt, ...);
+
+/**
+ * @brief Force flush all active logger sinks immediately.
+ */
+void logger_flush(void);
+
+/**
+ * @brief Flush pending buffers and clean up primary logger resources.
+ * Safe to call multiple times and safe to call on exit.
  */
 void logger_shutdown(void);
-
-/**
- * @brief Pure C numerical component demonstration.
- */
-int run_c_computation(void);
-
-/**
- * @brief Fortran 2008 numerical solver component demonstration.
- */
-void run_fortran_solver(void);
 
 #ifdef __cplusplus
 }
 #endif
+
+/* -------------------------------------------------------------------------- */
+/* Ergonomic Logging Macros with Source-Location Capture & Fast-Path Guards   */
+/* -------------------------------------------------------------------------- */
+
+#define LOG_TRACE(comp, msg) logger_dispatch_loc(LOG_LVL_TRACE, comp, __FILE__, __LINE__, __func__, msg)
+#define LOG_DEBUG(comp, msg) logger_dispatch_loc(LOG_LVL_DEBUG, comp, __FILE__, __LINE__, __func__, msg)
+#define LOG_INFO(comp, msg)  logger_dispatch_loc(LOG_LVL_INFO,  comp, __FILE__, __LINE__, __func__, msg)
+#define LOG_WARN(comp, msg)  logger_dispatch_loc(LOG_LVL_WARN,  comp, __FILE__, __LINE__, __func__, msg)
+#define LOG_ERROR(comp, msg) logger_dispatch_loc(LOG_LVL_ERROR, comp, __FILE__, __LINE__, __func__, msg)
+#define LOG_FATAL(comp, msg) logger_dispatch_loc(LOG_LVL_FATAL, comp, __FILE__, __LINE__, __func__, msg)
+
+#define LOGF_TRACE(comp, ...) do { if (logger_is_enabled(LOG_LVL_TRACE)) logger_dispatch_format_loc(LOG_LVL_TRACE, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#define LOGF_DEBUG(comp, ...) do { if (logger_is_enabled(LOG_LVL_DEBUG)) logger_dispatch_format_loc(LOG_LVL_DEBUG, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#define LOGF_INFO(comp, ...)  do { if (logger_is_enabled(LOG_LVL_INFO))  logger_dispatch_format_loc(LOG_LVL_INFO,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#define LOGF_WARN(comp, ...)  do { if (logger_is_enabled(LOG_LVL_WARN))  logger_dispatch_format_loc(LOG_LVL_WARN,  comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#define LOGF_ERROR(comp, ...) do { if (logger_is_enabled(LOG_LVL_ERROR)) logger_dispatch_format_loc(LOG_LVL_ERROR, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
+#define LOGF_FATAL(comp, ...) do { if (logger_is_enabled(LOG_LVL_FATAL)) logger_dispatch_format_loc(LOG_LVL_FATAL, comp, __FILE__, __LINE__, __func__, __VA_ARGS__); } while(0)
 
 #endif /* POLYGLOT_LOG_H */

@@ -42,22 +42,29 @@ if(ENABLE_FORTRAN)
 endif()
 
 # ------------------------------------------------------------------------------
-# Dependency Management: spdlog via FetchContent
+# Dependency Management: spdlog (System vs FetchContent)
 # ------------------------------------------------------------------------------
-include(FetchContent)
+option(POLYGLOT_USE_SYSTEM_SPDLOG "Search for system installed spdlog before FetchContent" OFF)
 
-set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "Disable spdlog examples")
-set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "Disable spdlog tests")
-set(SPDLOG_INSTALL OFF CACHE INTERNAL "Disable spdlog install rules")
-set(SPDLOG_BUILD_SHARED OFF CACHE INTERNAL "Build static spdlog")
+if(POLYGLOT_USE_SYSTEM_SPDLOG)
+    find_package(spdlog CONFIG QUIET)
+endif()
 
-FetchContent_Declare(
-    spdlog
-    GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG        v1.14.1
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(spdlog)
+if(NOT TARGET spdlog::spdlog)
+    include(FetchContent)
+    set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "Disable spdlog examples")
+    set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "Disable spdlog tests")
+    set(SPDLOG_INSTALL OFF CACHE INTERNAL "Disable spdlog install rules")
+    set(SPDLOG_BUILD_SHARED OFF CACHE INTERNAL "Build static spdlog")
+
+    FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG        v1.14.1
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(spdlog)
+endif()
 
 # ------------------------------------------------------------------------------
 # Target 1: C++ Logging Core & C ABI Wrapper (Static Library)
@@ -84,6 +91,11 @@ add_library(c_subsystem STATIC
     src/c_subsystem.c
 )
 
+target_include_directories(c_subsystem
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
 target_link_libraries(c_subsystem
     PUBLIC
         polyglot_logger_core
@@ -100,6 +112,7 @@ if(HAVE_FORTRAN)
     target_include_directories(polyglot_logger_fortran
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_Fortran_MODULE_DIRECTORY}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     )
 
     target_link_libraries(polyglot_logger_fortran
@@ -138,6 +151,30 @@ if(HAVE_FORTRAN)
 endif()
 
 # ------------------------------------------------------------------------------
+# Target 5: Multi-threaded Concurrency Test Executable
+# ------------------------------------------------------------------------------
+add_executable(test_multithreaded
+    tests/test_multithreaded.cpp
+)
+
+target_link_libraries(test_multithreaded
+    PRIVATE
+        polyglot_logger_core
+)
+
+set_target_properties(test_multithreaded PROPERTIES
+    LINKER_LANGUAGE CXX
+)
+
+# ------------------------------------------------------------------------------
+# Standalone Examples Integration
+# ------------------------------------------------------------------------------
+option(BUILD_EXAMPLES "Build standalone zero-dependency example projects" ON)
+if(BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
+# ------------------------------------------------------------------------------
 # Compiler Diagnostics & Strict Warning Profiles
 # ------------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
@@ -150,6 +187,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     target_compile_options(cli_tool PRIVATE
         -Wall -Wextra -Wpedantic -Wshadow
     )
+    target_compile_options(test_multithreaded PRIVATE
+        -Wall -Wextra -Wpedantic
+    )
 elseif(MSVC)
     target_compile_options(polyglot_logger_core PRIVATE
         /W4 /permissive- /utf-8
@@ -158,6 +198,9 @@ elseif(MSVC)
         /W4 /utf-8
     )
     target_compile_options(cli_tool PRIVATE
+        /W4 /permissive- /utf-8
+    )
+    target_compile_options(test_multithreaded PRIVATE
         /W4 /permissive- /utf-8
     )
 endif()
@@ -184,10 +227,21 @@ install(TARGETS cli_tool
     COMPONENT Application
 )
 
-install(FILES include/polyglot_log.h
+install(FILES
+    include/polyglot_log.h
+    include/c_subsystem.h
+    include/fortran_solver.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Development
 )
+
+if(HAVE_FORTRAN)
+    install(DIRECTORY ${CMAKE_Fortran_MODULE_DIRECTORY}/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        COMPONENT Development
+        FILES_MATCHING PATTERN "*.mod"
+    )
+endif()
 
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
@@ -205,7 +259,7 @@ include(CTest)
 if(BUILD_TESTING)
     set(TEST_DRIVER "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_cli_test.cmake")
 
-    # Test 1: STDOUT Isolation (Application data must be clean with zero log leakage)
+    # 1. STDOUT Isolation (Application data must be clean with zero log leakage)
     add_test(
         NAME test_stdout_data_cleanliness
         COMMAND ${CMAKE_COMMAND}
@@ -215,7 +269,7 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 2: Default Log Level (stderr must contain [info], but NOT [debug] or [trace])
+    # 2. Default Log Level (stderr must contain [info], but NOT [debug] or [trace])
     add_test(
         NAME test_default_verbosity_filtering
         COMMAND ${CMAKE_COMMAND}
@@ -225,7 +279,7 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 3: Verbose Flag (stderr must show [debug] output when -v is passed)
+    # 3. Verbose Flag (stderr must show [debug] output when -v is passed)
     add_test(
         NAME test_verbose_debug_flag
         COMMAND ${CMAKE_COMMAND}
@@ -236,7 +290,7 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 4: Trace Flag (stderr must show [trace] output when -vv is passed)
+    # 4. Trace Flag (stderr must show [trace] output when -vv is passed)
     add_test(
         NAME test_trace_verbosity_flag
         COMMAND ${CMAKE_COMMAND}
@@ -246,7 +300,7 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 5: Quiet Flag (stderr must suppress [info] and [debug])
+    # 5. Quiet Flag (stderr must suppress [info], [debug], and [trace])
     add_test(
         NAME test_quiet_mode_flag
         COMMAND ${CMAKE_COMMAND}
@@ -256,7 +310,27 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 6: Dual-Sink File Logging (Verify disk write, ISO timestamp, thread info)
+    # 6. Silent Flag (--silent disables all console logging)
+    add_test(
+        NAME test_silent_mode_flag
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            -DCLI_ARGS=--silent
+            -DFORBID_STDERR=.+
+            -P ${TEST_DRIVER}
+    )
+
+    # 7. Explicit Named Level Flag (--log-level debug)
+    add_test(
+        NAME test_named_log_level_flag
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=--log-level debug"
+            -DEXPECT_STDERR=\\[debug\\]
+            -P ${TEST_DRIVER}
+    )
+
+    # 8. Dual-Sink File Logging (Verify disk write, ISO timestamp, thread info, source loc)
     set(TEST_LOG_PATH "${CMAKE_CURRENT_BINARY_DIR}/test_execution.log")
     add_test(
         NAME test_dual_sink_file_generation
@@ -269,7 +343,50 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 7: Help Flag (Emits usage and exits 0)
+    # 9. Independent File Level (--log-file-level info suppresses trace/debug in file)
+    set(TEST_INFO_LOG "${CMAKE_CURRENT_BINARY_DIR}/test_info.log")
+    add_test(
+        NAME test_file_level_independence
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=-l ${TEST_INFO_LOG} --log-file-level info"
+            -DEXPECT_FILE=${TEST_INFO_LOG}
+            "-DEXPECT_FILE_REGEX=\\[info\\].*Application starting"
+            -P ${TEST_DRIVER}
+    )
+
+    # 10. Environment Variable Override (POLYGLOT_LOG_LEVEL=debug)
+    add_test(
+        NAME test_env_var_override
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            -DTEST_ENV=POLYGLOT_LOG_LEVEL=debug
+            -DEXPECT_STDERR=\\[debug\\]
+            -P ${TEST_DRIVER}
+    )
+
+    # 11. NO_COLOR Standard Compliance (NO_COLOR=1)
+    add_test(
+        NAME test_no_color_compliance
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            -DTEST_ENV=NO_COLOR=1
+            -DEXPECT_STDERR=\\[info\\]
+            -P ${TEST_DRIVER}
+    )
+
+    # 12. Conflicting Flags Rejection (-q and -v together must fail with non-zero exit)
+    add_test(
+        NAME test_conflicting_flags_error
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:cli_tool>
+            "-DCLI_ARGS=-q -v"
+            -DEXPECT_EXIT_CODE=1
+            -DEXPECT_STDERR=Contradictory
+            -P ${TEST_DRIVER}
+    )
+
+    # 13. Help Flag (Emits usage and exits 0)
     add_test(
         NAME test_help_flag
         COMMAND ${CMAKE_COMMAND}
@@ -279,7 +396,7 @@ if(BUILD_TESTING)
             -P ${TEST_DRIVER}
     )
 
-    # Test 8: Polyglot Subsystem Logging (C-Subsystem and Fortran-Solver logs present)
+    # 14. Polyglot Subsystem Logging (C-Subsystem and Fortran-Solver logs present)
     if(HAVE_FORTRAN)
         add_test(
             NAME test_polyglot_solver_logging
@@ -289,6 +406,60 @@ if(BUILD_TESTING)
                 -DEXPECT_STDERR=(\\[C-Subsystem\\]|\\[Fortran-Solver\\])
                 -P ${TEST_DRIVER}
         )
+    endif()
+
+    # 15. Multi-threaded Concurrency Stress Test
+    add_test(
+        NAME test_multithreaded_concurrency
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI_EXE=$<TARGET_FILE:test_multithreaded>
+            -DEXPECT_STDOUT=MULTITHREADED_TEST_SUCCESS
+            -P ${TEST_DRIVER}
+    )
+
+    # 16. Standalone Examples Stream Isolation Tests
+    if(BUILD_EXAMPLES)
+        add_test(
+            NAME test_standalone_c
+            COMMAND ${CMAKE_COMMAND}
+                -DCLI_EXE=$<TARGET_FILE:c_tool>
+                -DCLI_ARGS=-v
+                -DEXPECT_STDOUT=^42$
+                -DEXPECT_STDERR=\\[DEBUG\\]
+                -P ${TEST_DRIVER}
+        )
+
+        add_test(
+            NAME test_standalone_cpp
+            COMMAND ${CMAKE_COMMAND}
+                -DCLI_EXE=$<TARGET_FILE:cpp_tool>
+                -DCLI_ARGS=-v
+                -DEXPECT_STDOUT=^42$
+                -DEXPECT_STDERR=\\[DEBUG\\]
+                -P ${TEST_DRIVER}
+        )
+
+        if(HAVE_FORTRAN)
+            add_test(
+                NAME test_standalone_fortran_modern
+                COMMAND ${CMAKE_COMMAND}
+                    -DCLI_EXE=$<TARGET_FILE:f08_tool>
+                    -DCLI_ARGS=-v
+                    -DEXPECT_STDOUT=^42$
+                    -DEXPECT_STDERR=\\[DEBUG\\]
+                    -P ${TEST_DRIVER}
+            )
+
+            add_test(
+                NAME test_standalone_fortran_legacy
+                COMMAND ${CMAKE_COMMAND}
+                    -DCLI_EXE=$<TARGET_FILE:f77_tool>
+                    -DCLI_ARGS=-v
+                    -DEXPECT_STDOUT=^42$
+                    -DEXPECT_STDERR=DEBUG
+                    -P ${TEST_DRIVER}
+            )
+        endif()
     endif()
 endif()
 
@@ -307,7 +478,6 @@ set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 
 set(CPACK_STRIP_FILES TRUE)
 
-# Select appropriate package generators based on platform
 if(WIN32)
     set(CPACK_GENERATOR "ZIP;TGZ")
 else()
@@ -322,7 +492,6 @@ set(CPACK_SOURCE_IGNORE_FILES
     "\\\\.log$"
 )
 
-# Debian (.deb) specific metadata
 set(CPACK_DEBIAN_PACKAGE_NAME "polyglot-cli")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Dr. Foad Sojoodi Farimani <foad@example.com>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "utils")

@@ -4,8 +4,8 @@ module logging_mod
     private
 
     public :: LOG_LVL_TRACE, LOG_LVL_DEBUG, LOG_LVL_INFO
-    public :: LOG_LVL_WARN, LOG_LVL_ERROR, LOG_LVL_FATAL
-    public :: f_log, f_log_enabled, run_fortran_solver
+    public :: LOG_LVL_WARN, LOG_LVL_ERROR, LOG_LVL_FATAL, LOG_LVL_OFF
+    public :: f_log, f_log_loc, f_log_iteration, f_log_enabled, run_fortran_solver
 
     enum, bind(c)
         enumerator :: LOG_LVL_TRACE = 0
@@ -14,6 +14,7 @@ module logging_mod
         enumerator :: LOG_LVL_WARN  = 3
         enumerator :: LOG_LVL_ERROR = 4
         enumerator :: LOG_LVL_FATAL = 5
+        enumerator :: LOG_LVL_OFF   = 6
     end enum
 
     interface
@@ -23,6 +24,17 @@ module logging_mod
             character(c_char), intent(in) :: component(*)
             character(c_char), intent(in) :: message(*)
         end subroutine logger_dispatch
+
+        subroutine logger_dispatch_loc(level, component, file, line, func, message) &
+                bind(c, name="logger_dispatch_loc")
+            import :: c_int, c_char
+            integer(c_int), value         :: level
+            character(c_char), intent(in) :: component(*)
+            character(c_char), intent(in) :: file(*)
+            integer(c_int), value         :: line
+            character(c_char), intent(in) :: func(*)
+            character(c_char), intent(in) :: message(*)
+        end subroutine logger_dispatch_loc
 
         function logger_is_enabled(level) bind(c, name="logger_is_enabled") result(res)
             import :: c_int
@@ -54,23 +66,52 @@ contains
                              trim(message) // c_null_char)
     end subroutine f_log
 
+    !> Safe Fortran logging with explicit source coordinates
+    subroutine f_log_loc(level, component, file, line, message)
+        integer(c_int), intent(in)   :: level
+        character(len=*), intent(in) :: component
+        character(len=*), intent(in) :: file
+        integer, intent(in)          :: line
+        character(len=*), intent(in) :: message
+
+        call logger_dispatch_loc(level, &
+                                 trim(component) // c_null_char, &
+                                 trim(file) // c_null_char, &
+                                 int(line, c_int), &
+                                 "" // c_null_char, &
+                                 trim(message) // c_null_char)
+    end subroutine f_log_loc
+
+    !> Internal-write formatting helper for mathematical iteration loops
+    subroutine f_log_iteration(level, component, iter, residual)
+        integer(c_int), intent(in)   :: level
+        character(len=*), intent(in) :: component
+        integer, intent(in)          :: iter
+        real(8), intent(in)          :: residual
+        character(len=128)           :: buffer
+
+        if (.not. f_log_enabled(level)) return
+
+        write(buffer, '(A, I0, A, ES10.3)') "Iteration ", iter, ": Residual norm = ", residual
+        call f_log(level, component, trim(buffer))
+    end subroutine f_log_iteration
+
     !> Demonstrates a numerical computation routine written in Fortran interoperating with C ABI
     subroutine run_fortran_solver() bind(c, name="run_fortran_solver")
         implicit none
+        real(8) :: res1, res2
 
         call f_log(LOG_LVL_INFO, "Fortran-Solver", "Initializing Krylov subspace iterative solver")
 
-        if (f_log_enabled(LOG_LVL_DEBUG)) then
-            call f_log(LOG_LVL_DEBUG, "Fortran-Solver", "Iteration 1: Residual norm = 1.42e-02")
-        end if
+        res1 = 1.42d-02
+        call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 1, res1)
 
         if (f_log_enabled(LOG_LVL_TRACE)) then
             call f_log(LOG_LVL_TRACE, "Fortran-Solver", "Vector dot product <r, r> = 2.0164e-04")
         end if
 
-        if (f_log_enabled(LOG_LVL_DEBUG)) then
-            call f_log(LOG_LVL_DEBUG, "Fortran-Solver", "Iteration 2: Residual norm = 8.15e-06")
-        end if
+        res2 = 8.15d-06
+        call f_log_iteration(LOG_LVL_DEBUG, "Fortran-Solver", 2, res2)
 
         call f_log(LOG_LVL_INFO, "Fortran-Solver", "Solver converged in 2 iterations (tol=1.0e-05)")
     end subroutine run_fortran_solver

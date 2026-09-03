@@ -8,7 +8,8 @@
  * @brief Zero-dependency C++17 canonical dual-sink CLI logging MWE.
  *
  * Demonstrates variadic fold-expressions for type-safe logging, strict stream
- * separation (payload to std::cout, diagnostics to std::cerr), and dual sinks.
+ * separation (payload to std::cout, diagnostics to std::cerr), thread-safe time
+ * formatting, and dual sinks.
  */
 
 enum Level { INFO, DEBUG };
@@ -23,8 +24,14 @@ void log_msg(Level lvl, Args&&... args) {
     auto emit = [&](std::ostream& os, bool timestamp) {
         if (timestamp) {
             std::time_t t = std::time(nullptr);
-            char buf[16];
-            std::strftime(buf, sizeof(buf), "%T ", std::localtime(&t));
+            char buf[32];
+            std::tm tm_buf;
+#if defined(_WIN32)
+            localtime_s(&tm_buf, &t);
+#else
+            localtime_r(&t, &tm_buf);
+#endif
+            std::strftime(buf, sizeof(buf), "%T ", &tm_buf);
             os << buf;
         }
         os << (lvl == DEBUG ? "[DEBUG] " : "[INFO] ");
