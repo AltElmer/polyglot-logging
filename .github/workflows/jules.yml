@@ -1,0 +1,92 @@
+name: Jules
+
+# Hand a task to the Jules cloud agent. Manual dispatch only, on purpose.
+#
+# There is deliberately no `schedule:` and no `issues:` trigger. This
+# repository is public, so an issue-triggered workflow would let anyone who can
+# open an issue write the prompt that an agent then executes with our API key,
+# and a scheduled one would open pull requests while nobody is watching. Both
+# are easy to add later, once there is a track record to judge them by; neither
+# is a good first move.
+#
+# workflow_dispatch already requires write access to the repository, so the
+# trigger is gated by GitHub's own permissions rather than by a login allowlist
+# that would need maintaining.
+#
+# What this costs when it runs: the action posts to the Jules API with
+# `requirePlanApproval: false` and `automationMode: AUTO_CREATE_PR`, both
+# hardcoded in the action with no input to change them. So a run approves its
+# own plan and opens a pull request without asking. That is the whole reason
+# this is dispatch-only. If you want a session you can inspect before it acts,
+# drive the API directly instead, where both are settable:
+#
+#   python jules_cli.py create --repo AltElmer/polyglot-logging \
+#       --require-plan-approval --prompt "..."
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "What Jules should do. Be specific; it acts on this without asking."
+        required: true
+        type: string
+      starting_branch:
+        description: "Branch to start from"
+        required: false
+        default: "main"
+        type: string
+      include_commit_log:
+        description: "Append the last 20 commits to the prompt"
+        required: false
+        default: false
+        type: boolean
+
+# Two runs against one repository would work from different snapshots of it and
+# open competing pull requests.
+concurrency:
+  group: jules-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    name: invoke Jules
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: refuse to run without the API key
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: |
+          if [ -z "$JULES_API_KEY" ]; then
+            echo "::error::JULES_API_KEY is not set for this repository."
+            echo "Set it at the organisation level (AltElmer -> Settings -> Secrets and variables -> Actions)"
+            echo "so every repository shares one, rather than per repository."
+            exit 1
+          fi
+          echo "ok: an API key is present"
+
+      # Pinned to a commit, not to a tag, for two reasons.
+      #
+      # The first is that @v1 does not exist. The action's own README and its
+      # examples/ directory both say `google-labs-code/jules-action@v1`, but the
+      # repository has no v1 ref -- tag or branch. Its tags are v1.0.0, v0.0.1
+      # and ai-assisted. Copying the documented line gives "unable to resolve
+      # action". bff7875 is v1.0.0, and is also the current tip of main.
+      #
+      # The second is that this step is handed our API key. A tag can be moved;
+      # a commit cannot. Re-pin deliberately when there is a reason to.
+      - name: Jules
+        uses: google-labs-code/jules-action@bff7875eaa123cac6742b7cfc51005b95ba4d566
+        with:
+          prompt: ${{ inputs.prompt }}
+          starting_branch: ${{ inputs.starting_branch }}
+          include_commit_log: ${{ inputs.include_commit_log }}
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+
+      - name: where the result appears
+        run: |
+          echo "Jules runs asynchronously on Google's side; this job finishing"
+          echo "means the request was accepted, not that the work is done."
+          echo "Watch https://jules.google.com/ and this repository's pull requests."
